@@ -1,9 +1,15 @@
 /// <reference types="vite/client" />
-import {expect, test} from 'vitest';
+import {beforeEach, expect, test, vi} from 'vitest';
 import {ConvexError} from 'convex/values';
 import type {Value} from 'convex/values';
 import {api} from './_generated/api.js';
-import {initConvexTest} from './setup.test.js';
+import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+
+// Hardening: stub the declared signing secret before every test (file-scoped
+// hook; see setup.test.ts).
+beforeEach(() => {
+  vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
+});
 
 test('write → get roundtrip through the AgentMemory client', async () => {
   const t = initConvexTest();

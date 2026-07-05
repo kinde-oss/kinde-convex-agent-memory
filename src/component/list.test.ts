@@ -1,10 +1,16 @@
 /// <reference types="vite/client" />
-import {afterEach, describe, expect, test, vi} from 'vitest';
+import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest';
 import {api} from './_generated/api.js';
 import {digestFilter} from './lib/digest.js';
-import {initConvexTest} from './setup.test.js';
+import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
+
+// Hardening: stub the declared signing secret before every test (file-scoped
+// hook; see setup.test.ts). Keys the audit digests asserted below.
+beforeEach(() => {
+  vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
+});
 
 const ORG_A = 'org_alpha';
 const ORG_B = 'org_beta';
@@ -282,7 +288,7 @@ describe('audit discipline for list', () => {
     for (const row of listRows) {
       // The digest is the fingerprint of the WHOLE filter object; raw filter
       // values never appear anywhere in the row.
-      expect(row.keyOrQueryDigest).toBe(digestFilter(filter));
+      expect(row.keyOrQueryDigest).toBe(await digestFilter(filter));
       const serialized = JSON.stringify(row);
       expect(serialized).not.toContain('notes/');
       expect(serialized).not.toContain(SENSITIVE_VALUE);

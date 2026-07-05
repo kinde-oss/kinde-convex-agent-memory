@@ -1,10 +1,16 @@
 /// <reference types="vite/client" />
-import {expect, test} from 'vitest';
+import {beforeEach, expect, test, vi} from 'vitest';
 import {ConvexError} from 'convex/values';
 import type {Value} from 'convex/values';
 import {api} from './_generated/api.js';
-import {initConvexTest} from './setup.test.js';
+import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
 import {CONTENT_REDACTED} from '@kinde-oss/kinde-convex-agent-memory';
+
+// Hardening: stub the declared signing secret before every test (file-scoped
+// hook; see setup.test.ts).
+beforeEach(() => {
+  vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
+});
 
 async function expectClientError(
   promise: Promise<unknown>,
@@ -146,5 +152,62 @@ test('clearing a nonexistent policy throws typed policy_not_found through the cl
       fields: []
     }),
     'policy_not_found'
+  );
+});
+
+test('kill-switch overlay through the client: revoke → throws revoked → lift → works', async () => {
+  const t = initConvexTest();
+  // ALICE writes freely (permissive).
+  await t.mutation(api.example.writeMemory, {
+    subject: 'user_alice',
+    orgCode: 'org_alpha',
+    key: 'k1',
+    content: 'c'
+  });
+
+  // Revoke ALICE at subject level via the overlay.
+  const revoked = await t.mutation(api.example.revokeCaller, {
+    subject: 'user_admin',
+    orgCode: 'org_alpha',
+    target: {kind: 'subject', orgCode: 'org_alpha', subject: 'user_alice'},
+    reason: 'compromised-token'
+  });
+  expect(revoked.outcome).toBe('revoked');
+
+  // The SAME write now throws typed `revoked` through the client.
+  await expectClientError(
+    t.mutation(api.example.writeMemory, {
+      subject: 'user_alice',
+      orgCode: 'org_alpha',
+      key: 'k2',
+      content: 'c'
+    }),
+    'revoked'
+  );
+
+  // Lifting restores access; the write succeeds again.
+  await t.mutation(api.example.liftCaller, {
+    subject: 'user_admin',
+    orgCode: 'org_alpha',
+    target: {kind: 'subject', orgCode: 'org_alpha', subject: 'user_alice'}
+  });
+  const after = await t.mutation(api.example.writeMemory, {
+    subject: 'user_alice',
+    orgCode: 'org_alpha',
+    key: 'k3',
+    content: 'c'
+  });
+  expect(after.outcome).toBe('created');
+});
+
+test('lifting a non-revoked target throws typed revocation_not_found through the client', async () => {
+  const t = initConvexTest();
+  await expectClientError(
+    t.mutation(api.example.liftCaller, {
+      subject: 'user_admin',
+      orgCode: 'org_alpha',
+      target: {kind: 'global'}
+    }),
+    'revocation_not_found'
   );
 });

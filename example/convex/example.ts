@@ -241,6 +241,47 @@ export const setRedactionPolicy = mutation({
   }
 });
 
+/** The revocation-target shape accepted by the overlay kill switch. */
+const revocationTargetArg = v.object({
+  kind: v.union(v.literal('global'), v.literal('org'), v.literal('subject')),
+  orgCode: v.optional(v.string()),
+  subject: v.optional(v.string())
+});
+
+/**
+ * Revoke a caller via the P5 kill-switch OVERLAY through the client. Outranks
+ * grants — a revoked caller is denied `revoked` whatever scopes it holds, until
+ * the revocation is lifted. Distinct from `revokeAccess` above, which revokes a
+ * single scope grant.
+ */
+export const revokeCaller = mutation({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    target: revocationTargetArg,
+    reason: v.string()
+  },
+  returns: v.object({outcome: v.string(), correlationId: v.string()}),
+  handler: async (ctx, args) => {
+    const result = await agentMemory.revoke(ctx, args);
+    return {outcome: result.outcome, correlationId: result.correlationId};
+  }
+});
+
+/** Lift an overlay revocation through the client, restoring access. */
+export const liftCaller = mutation({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    target: revocationTargetArg
+  },
+  returns: v.object({correlationId: v.string()}),
+  handler: async (ctx, args) => {
+    const result = await agentMemory.liftRevocation(ctx, args);
+    return {correlationId: result.correlationId};
+  }
+});
+
 /** Governed read-by-key through the client (null when absent IN THIS TENANT). */
 export const getMemory = mutation({
   args: {

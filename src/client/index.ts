@@ -60,6 +60,14 @@ type SetRedactionArgs = FunctionArgs<ComponentApi['policy']['setRedaction']>;
 type SetRedactionResult = FunctionReturnType<
   ComponentApi['policy']['setRedaction']
 >;
+type RevokeArgs = FunctionArgs<ComponentApi['revocations']['revoke']>;
+type RevokeResult = FunctionReturnType<ComponentApi['revocations']['revoke']>;
+type LiftRevocationArgs = FunctionArgs<
+  ComponentApi['revocations']['liftRevocation']
+>;
+type LiftRevocationResult = FunctionReturnType<
+  ComponentApi['revocations']['liftRevocation']
+>;
 
 /** Arguments to {@link AgentMemory.write}. */
 export type MemoryWriteArgs = WriteArgs;
@@ -98,6 +106,16 @@ export type MemoryRevokeGrantOk = Extract<RevokeGrantResult, {ok: true}>;
 export type MemorySetRedactionArgs = SetRedactionArgs;
 /** A successful setRedaction: `set` or `cleared`, and the correlation id. */
 export type MemorySetRedactionOk = Extract<SetRedactionResult, {ok: true}>;
+/** Arguments to {@link AgentMemory.revoke}. */
+export type MemoryRevokeArgs = RevokeArgs;
+/** The revocation target shape (kind + optional orgCode/subject). */
+export type MemoryRevocationTarget = RevokeArgs['target'];
+/** A successful revoke: the revocation id, how it resolved, correlation id. */
+export type MemoryRevokeOk = Extract<RevokeResult, {ok: true}>;
+/** Arguments to {@link AgentMemory.liftRevocation}. */
+export type MemoryLiftRevocationArgs = LiftRevocationArgs;
+/** A successful lift: the lifted revocation's id and the correlation id. */
+export type MemoryLiftRevocationOk = Extract<LiftRevocationResult, {ok: true}>;
 /** The closed set of grantable scopes. */
 export type MemoryGrantScope = GrantArgs['scope'];
 /** A full memory record, as returned by governed reads. */
@@ -404,6 +422,54 @@ export class AgentMemory {
   ): Promise<MemorySetRedactionOk> {
     const result = await ctx.runMutation(
       this.component.policy.setRedaction,
+      args
+    );
+    if (!result.ok) {
+      throwDenied(result);
+    }
+    return result;
+  }
+
+  /**
+   * Revoke access via the P5 KILL SWITCH OVERLAY — a `global`, `org`, or
+   * `subject` target that OUTRANKS grants: a revoked caller is denied `revoked`
+   * regardless of the scopes it holds, and a fresh grant cannot resurrect it —
+   * only {@link AgentMemory.liftRevocation} does. Idempotent for an
+   * already-active target (`outcome: 'already_revoked'`). `reason` is stored on
+   * the revocation row only and never surfaces in audit rows or denial
+   * messages. Throws a typed ConvexError (`invalid_revocation_target`,
+   * `tenant_context_conflict`) on a governed denial, after it has committed.
+   *
+   * NOTE on targets: `global` is cross-tenant by nature and app-trusted (the
+   * host app gates who may call this); `org`/`subject` are confined to the
+   * caller's server-verified tenant.
+   */
+  async revoke(
+    ctx: RunMutationCtx,
+    args: MemoryRevokeArgs
+  ): Promise<MemoryRevokeOk> {
+    const result = await ctx.runMutation(
+      this.component.revocations.revoke,
+      args
+    );
+    if (!result.ok) {
+      throwDenied(result);
+    }
+    return result;
+  }
+
+  /**
+   * Lift an active revocation, restoring access (grants then govern exactly as
+   * before). The revocation row is kept as history; a later revoke re-arms the
+   * overlay. Lifting a target with no active revocation throws typed
+   * `revocation_not_found` — a denial, not a no-op — after it has committed.
+   */
+  async liftRevocation(
+    ctx: RunMutationCtx,
+    args: MemoryLiftRevocationArgs
+  ): Promise<MemoryLiftRevocationOk> {
+    const result = await ctx.runMutation(
+      this.component.revocations.liftRevocation,
       args
     );
     if (!result.ok) {

@@ -29,9 +29,30 @@ export const operationValidator = v.union(
   v.literal('recall'),
   v.literal('grant'),
   v.literal('revoke_grant'),
-  v.literal('set_redaction')
+  v.literal('set_redaction'),
+  v.literal('revoke'),
+  v.literal('lift_revocation')
 );
 export type MemoryOperation = Infer<typeof operationValidator>;
+
+/**
+ * A revocation target, as accepted by `revoke`/`liftRevocation`. Kept
+ * DELIBERATELY LOOSE at the validator layer (optional orgCode/subject rather
+ * than a discriminated union) so that a CONTRADICTORY combination — e.g.
+ * kind 'org' without an orgCode, or kind 'global' with a subject — reaches
+ * the handler and is denied with a typed, AUDITED
+ * `invalid_revocation_target`, instead of dying unaudited at the argument
+ * validator. The handler normalizes it to the strict store shape.
+ */
+export const revocationTargetValidator = v.object({
+  kind: v.union(v.literal('global'), v.literal('org'), v.literal('subject')),
+  orgCode: v.optional(v.string()),
+  subject: v.optional(v.string())
+});
+export type RevocationTargetArg = Infer<typeof revocationTargetValidator>;
+
+/** The level at which an active revocation matched a caller. */
+export type RevocationLevel = 'global' | 'org' | 'subject';
 
 /**
  * The CLOSED set of grantable scopes, mapped one-to-one onto the governed
@@ -73,7 +94,10 @@ export const deniedCodeValidator = v.union(
   v.literal('scope_not_granted'),
   v.literal('grant_not_found'),
   v.literal('policy_not_found'),
-  v.literal('invalid_redaction_fields')
+  v.literal('invalid_redaction_fields'),
+  v.literal('revoked'),
+  v.literal('revocation_not_found'),
+  v.literal('invalid_revocation_target')
 );
 export type DeniedCode = Infer<typeof deniedCodeValidator>;
 
@@ -115,7 +139,15 @@ export const auditReasonValidator = v.union(
   v.literal('scope_not_granted'),
   v.literal('grant_not_found'),
   v.literal('policy_not_found'),
-  v.literal('invalid_redaction_fields')
+  v.literal('invalid_redaction_fields'),
+  // P5. NOTE: the literal 'revoked' (already in this union) does double duty
+  // disambiguated by `decision`: (revoke_grant, ok) = a grant was revoked;
+  // (any memory op, denied) = the caller is under an active revocation.
+  v.literal('revocation_created'),
+  v.literal('already_revoked'),
+  v.literal('revocation_lifted'),
+  v.literal('revocation_not_found'),
+  v.literal('invalid_revocation_target')
 );
 export type AuditReason = Infer<typeof auditReasonValidator>;
 
@@ -260,6 +292,34 @@ export const setRedactionResultValidator = v.union(
   deniedResultValidator
 );
 export type SetRedactionResult = Infer<typeof setRedactionResultValidator>;
+
+/** How a successful revoke resolved (re-revoking an active target replays). */
+export const revokeOutcomeValidator = v.union(
+  v.literal('revoked'),
+  v.literal('already_revoked')
+);
+export type RevokeOutcome = Infer<typeof revokeOutcomeValidator>;
+
+export const revokeResultValidator = v.union(
+  v.object({
+    ok: v.literal(true),
+    revocationId: v.id('revocations'),
+    outcome: revokeOutcomeValidator,
+    correlationId: v.string()
+  }),
+  deniedResultValidator
+);
+export type RevokeResult = Infer<typeof revokeResultValidator>;
+
+export const liftRevocationResultValidator = v.union(
+  v.object({
+    ok: v.literal(true),
+    revocationId: v.id('revocations'),
+    correlationId: v.string()
+  }),
+  deniedResultValidator
+);
+export type LiftRevocationResult = Infer<typeof liftRevocationResultValidator>;
 
 export const listResultValidator = v.union(
   v.object({

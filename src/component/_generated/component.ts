@@ -8,7 +8,7 @@
  * @module
  */
 
-import type {FunctionReference} from 'convex/server';
+import type { FunctionReference } from "convex/server";
 
 /**
  * A utility for referencing a Convex component's exposed API.
@@ -25,13 +25,13 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
     grants: {
       grant: FunctionReference<
-        'mutation',
-        'internal',
+        "mutation",
+        "internal",
         {
           claimedOrgCode?: string;
           correlationId?: string;
           orgCode: string;
-          scope: 'memory.read' | 'memory.write' | 'memory.recall';
+          scope: "memory.read" | "memory.write" | "memory.recall";
           subject: string;
           targetSubject: string;
         },
@@ -39,19 +39,22 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             correlationId: string;
             grantId: string;
             ok: true;
-            outcome: 'granted' | 'already_granted';
+            outcome: "granted" | "already_granted";
           }
         | {
             code:
-              | 'tenant_context_conflict'
-              | 'idempotency_key_reused'
-              | 'invalid_filter'
-              | 'invalid_embedding'
-              | 'invalid_topk'
-              | 'scope_not_granted'
-              | 'grant_not_found'
-              | 'policy_not_found'
-              | 'invalid_redaction_fields';
+              | "tenant_context_conflict"
+              | "idempotency_key_reused"
+              | "invalid_filter"
+              | "invalid_embedding"
+              | "invalid_topk"
+              | "scope_not_granted"
+              | "grant_not_found"
+              | "policy_not_found"
+              | "invalid_redaction_fields"
+              | "revoked"
+              | "revocation_not_found"
+              | "invalid_revocation_target";
             correlationId: string;
             message: string;
             ok: false;
@@ -59,28 +62,31 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
       revokeGrant: FunctionReference<
-        'mutation',
-        'internal',
+        "mutation",
+        "internal",
         {
           claimedOrgCode?: string;
           correlationId?: string;
           orgCode: string;
-          scope: 'memory.read' | 'memory.write' | 'memory.recall';
+          scope: "memory.read" | "memory.write" | "memory.recall";
           subject: string;
           targetSubject: string;
         },
-        | {correlationId: string; grantId: string; ok: true}
+        | { correlationId: string; grantId: string; ok: true }
         | {
             code:
-              | 'tenant_context_conflict'
-              | 'idempotency_key_reused'
-              | 'invalid_filter'
-              | 'invalid_embedding'
-              | 'invalid_topk'
-              | 'scope_not_granted'
-              | 'grant_not_found'
-              | 'policy_not_found'
-              | 'invalid_redaction_fields';
+              | "tenant_context_conflict"
+              | "idempotency_key_reused"
+              | "invalid_filter"
+              | "invalid_embedding"
+              | "invalid_topk"
+              | "scope_not_granted"
+              | "grant_not_found"
+              | "policy_not_found"
+              | "invalid_redaction_fields"
+              | "revoked"
+              | "revocation_not_found"
+              | "invalid_revocation_target";
             correlationId: string;
             message: string;
             ok: false;
@@ -90,8 +96,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     };
     memory: {
       get: FunctionReference<
-        'mutation',
-        'internal',
+        "mutation",
+        "internal",
         {
           claimedOrgCode?: string;
           correlationId?: string;
@@ -128,15 +134,18 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           }
         | {
             code:
-              | 'tenant_context_conflict'
-              | 'idempotency_key_reused'
-              | 'invalid_filter'
-              | 'invalid_embedding'
-              | 'invalid_topk'
-              | 'scope_not_granted'
-              | 'grant_not_found'
-              | 'policy_not_found'
-              | 'invalid_redaction_fields';
+              | "tenant_context_conflict"
+              | "idempotency_key_reused"
+              | "invalid_filter"
+              | "invalid_embedding"
+              | "invalid_topk"
+              | "scope_not_granted"
+              | "grant_not_found"
+              | "policy_not_found"
+              | "invalid_redaction_fields"
+              | "revoked"
+              | "revocation_not_found"
+              | "invalid_revocation_target";
             correlationId: string;
             message: string;
             ok: false;
@@ -144,8 +153,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
       list: FunctionReference<
-        'mutation',
-        'internal',
+        "mutation",
+        "internal",
         {
           claimedOrgCode?: string;
           correlationId?: string;
@@ -201,15 +210,18 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           }
         | {
             code:
-              | 'tenant_context_conflict'
-              | 'idempotency_key_reused'
-              | 'invalid_filter'
-              | 'invalid_embedding'
-              | 'invalid_topk'
-              | 'scope_not_granted'
-              | 'grant_not_found'
-              | 'policy_not_found'
-              | 'invalid_redaction_fields';
+              | "tenant_context_conflict"
+              | "idempotency_key_reused"
+              | "invalid_filter"
+              | "invalid_embedding"
+              | "invalid_topk"
+              | "scope_not_granted"
+              | "grant_not_found"
+              | "policy_not_found"
+              | "invalid_redaction_fields"
+              | "revoked"
+              | "revocation_not_found"
+              | "invalid_revocation_target";
             correlationId: string;
             message: string;
             ok: false;
@@ -217,8 +229,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
       recall: FunctionReference<
-        'action',
-        'internal',
+        "action",
+        "internal",
         {
           claimedOrgCode?: string;
           correlationId?: string;
@@ -259,15 +271,18 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           }
         | {
             code:
-              | 'tenant_context_conflict'
-              | 'idempotency_key_reused'
-              | 'invalid_filter'
-              | 'invalid_embedding'
-              | 'invalid_topk'
-              | 'scope_not_granted'
-              | 'grant_not_found'
-              | 'policy_not_found'
-              | 'invalid_redaction_fields';
+              | "tenant_context_conflict"
+              | "idempotency_key_reused"
+              | "invalid_filter"
+              | "invalid_embedding"
+              | "invalid_topk"
+              | "scope_not_granted"
+              | "grant_not_found"
+              | "policy_not_found"
+              | "invalid_redaction_fields"
+              | "revoked"
+              | "revocation_not_found"
+              | "invalid_revocation_target";
             correlationId: string;
             message: string;
             ok: false;
@@ -275,8 +290,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
       write: FunctionReference<
-        'mutation',
-        'internal',
+        "mutation",
+        "internal",
         {
           claimedOrgCode?: string;
           content: string;
@@ -299,19 +314,22 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             correlationId: string;
             memoryId: string;
             ok: true;
-            outcome: 'created' | 'updated' | 'idempotent_replay';
+            outcome: "created" | "updated" | "idempotent_replay";
           }
         | {
             code:
-              | 'tenant_context_conflict'
-              | 'idempotency_key_reused'
-              | 'invalid_filter'
-              | 'invalid_embedding'
-              | 'invalid_topk'
-              | 'scope_not_granted'
-              | 'grant_not_found'
-              | 'policy_not_found'
-              | 'invalid_redaction_fields';
+              | "tenant_context_conflict"
+              | "idempotency_key_reused"
+              | "invalid_filter"
+              | "invalid_embedding"
+              | "invalid_topk"
+              | "scope_not_granted"
+              | "grant_not_found"
+              | "policy_not_found"
+              | "invalid_redaction_fields"
+              | "revoked"
+              | "revocation_not_found"
+              | "invalid_revocation_target";
             correlationId: string;
             message: string;
             ok: false;
@@ -321,8 +339,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
     };
     policy: {
       setRedaction: FunctionReference<
-        'mutation',
-        'internal',
+        "mutation",
+        "internal",
         {
           claimedOrgCode?: string;
           correlationId?: string;
@@ -331,18 +349,99 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           subject: string;
           targetSubject?: string;
         },
-        | {correlationId: string; ok: true; outcome: 'set' | 'cleared'}
+        | { correlationId: string; ok: true; outcome: "set" | "cleared" }
         | {
             code:
-              | 'tenant_context_conflict'
-              | 'idempotency_key_reused'
-              | 'invalid_filter'
-              | 'invalid_embedding'
-              | 'invalid_topk'
-              | 'scope_not_granted'
-              | 'grant_not_found'
-              | 'policy_not_found'
-              | 'invalid_redaction_fields';
+              | "tenant_context_conflict"
+              | "idempotency_key_reused"
+              | "invalid_filter"
+              | "invalid_embedding"
+              | "invalid_topk"
+              | "scope_not_granted"
+              | "grant_not_found"
+              | "policy_not_found"
+              | "invalid_redaction_fields"
+              | "revoked"
+              | "revocation_not_found"
+              | "invalid_revocation_target";
+            correlationId: string;
+            message: string;
+            ok: false;
+          },
+        Name
+      >;
+    };
+    revocations: {
+      liftRevocation: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          claimedOrgCode?: string;
+          correlationId?: string;
+          orgCode: string;
+          subject: string;
+          target: {
+            kind: "global" | "org" | "subject";
+            orgCode?: string;
+            subject?: string;
+          };
+        },
+        | { correlationId: string; ok: true; revocationId: string }
+        | {
+            code:
+              | "tenant_context_conflict"
+              | "idempotency_key_reused"
+              | "invalid_filter"
+              | "invalid_embedding"
+              | "invalid_topk"
+              | "scope_not_granted"
+              | "grant_not_found"
+              | "policy_not_found"
+              | "invalid_redaction_fields"
+              | "revoked"
+              | "revocation_not_found"
+              | "invalid_revocation_target";
+            correlationId: string;
+            message: string;
+            ok: false;
+          },
+        Name
+      >;
+      revoke: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          claimedOrgCode?: string;
+          correlationId?: string;
+          orgCode: string;
+          reason: string;
+          subject: string;
+          target: {
+            kind: "global" | "org" | "subject";
+            orgCode?: string;
+            subject?: string;
+          };
+        },
+        | {
+            correlationId: string;
+            ok: true;
+            outcome: "revoked" | "already_revoked";
+            revocationId: string;
+          }
+        | {
+            code:
+              | "tenant_context_conflict"
+              | "idempotency_key_reused"
+              | "invalid_filter"
+              | "invalid_embedding"
+              | "invalid_topk"
+              | "scope_not_granted"
+              | "grant_not_found"
+              | "policy_not_found"
+              | "invalid_redaction_fields"
+              | "revoked"
+              | "revocation_not_found"
+              | "invalid_revocation_target";
             correlationId: string;
             message: string;
             ok: false;

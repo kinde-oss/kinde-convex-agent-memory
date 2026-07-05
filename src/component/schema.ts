@@ -116,6 +116,46 @@ export default defineSchema({
     createdAt: v.number()
   }).index('by_org', ['orgCode']),
 
+  /**
+   * The revocation KILL-SWITCH OVERLAY (P5): checked by every governed
+   * memory operation AFTER the tenant-conflict check and BEFORE the scope
+   * gate, and it OUTRANKS grants — a revoked caller is denied `revoked` no
+   * matter what scopes it holds, and fresh grants cannot resurrect it; only
+   * lifting the revocation does.
+   *
+   * TARGET ENCODING: `kind` discriminates the level; `orgCode`/`subject` are
+   * null where the level does not use them (global → both null; org →
+   * subject null; subject → both set). Resolution precedence is
+   * global > org > subject: a broader active revocation wins even when the
+   * narrower levels are clean. Grant-LEVEL revocation is NOT here — it lives
+   * on the grant row (`accessGrants.revokedAt`, P4); this overlay covers the
+   * broader targets.
+   *
+   * ACTIVE = `liftedAt` null. Lifting stamps `liftedBy`/`liftedAt` and KEEPS
+   * the row (history); re-revoking after a lift inserts a fresh row.
+   * `reason` is stored HERE ONLY — it never reaches audit rows or denial
+   * messages (it may be sensitive; auditors join through the store).
+   *
+   * INDEX CHOICE: one composite index `by_kind_org_subject` serves all three
+   * levels as exact prefix-equality lookups — (kind='global', null, null),
+   * (kind='org', org, null), (kind='subject', org, subject) — so the overlay
+   * check is three cheap point lookups. This is the one table whose index
+   * does NOT lead with orgCode, deliberately: a global revocation is
+   * cross-tenant BY NATURE, so `kind` must lead; the org/subject lookups
+   * still pin orgCode at the second position, and the table is only ever
+   * reached through `lib/revocationStore.ts` (grep-pinned).
+   */
+  revocations: defineTable({
+    kind: v.union(v.literal('global'), v.literal('org'), v.literal('subject')),
+    orgCode: nullableString,
+    subject: nullableString,
+    reason: v.string(),
+    revokedBy: v.string(),
+    revokedAt: v.number(),
+    liftedBy: nullableString,
+    liftedAt: v.union(v.number(), v.null())
+  }).index('by_kind_org_subject', ['kind', 'orgCode', 'subject']),
+
   audit: defineTable({
     orgCode: v.string(),
     subject: v.string(),

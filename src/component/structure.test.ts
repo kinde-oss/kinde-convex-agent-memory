@@ -1,5 +1,12 @@
 /// <reference types="vite/client" />
-import {expect, test} from 'vitest';
+import {beforeEach, expect, test, vi} from 'vitest';
+
+// Hardening convention: every test file stubs the declared component env vars
+// before each test. These are static source-text checks that run no functions,
+// so the stub is inert here, but the convention is kept uniform across files.
+beforeEach(() => {
+  vi.stubEnv('MEMORY_SIGNING_SECRET', 'test-signing-secret');
+});
 
 // Every component source file, as raw text — a grep, run as a test.
 const sources = import.meta.glob('./**/*.ts', {
@@ -68,6 +75,19 @@ test("the 'redactionPolicies' table is accessed by exactly one module: lib/redac
     .map(([path]) => path)
     .sort();
   expect(accessors).toEqual(['./lib/redaction.ts']);
+});
+
+/** P5: the revocation store is pinned exactly like the memories path. */
+test("the 'revocations' table is accessed by exactly one module: lib/revocationStore.ts", () => {
+  const REVOCATIONS_TABLE_ACCESS =
+    /\.(?:query|get|insert|patch|replace|delete)\(\s*['"]revocations['"]/;
+  const accessors = Object.entries(sources)
+    .filter(([path]) => !path.includes('/_generated/'))
+    .filter(([path]) => !path.endsWith('.test.ts'))
+    .filter(([, source]) => REVOCATIONS_TABLE_ACCESS.test(source))
+    .map(([path]) => path)
+    .sort();
+  expect(accessors).toEqual(['./lib/revocationStore.ts']);
 });
 
 /**

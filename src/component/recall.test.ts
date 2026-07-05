@@ -1,11 +1,17 @@
 /// <reference types="vite/client" />
-import {describe, expect, test} from 'vitest';
+import {beforeEach, describe, expect, test, vi} from 'vitest';
 import {api} from './_generated/api.js';
 import {getMemoriesByIds} from './access.js';
 import {EMBEDDING_DIMENSIONS, MAX_RECALL_TOP_K} from './lib/embedding.js';
-import {expectFail, initConvexTest} from './setup.test.js';
+import {expectFail, initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
+
+// Hardening: stub the declared signing secret before every test (file-scoped
+// hook; see setup.test.ts). Keys the audit digests written by the write path.
+beforeEach(() => {
+  vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
+});
 
 const ORG_A = 'org_alpha';
 const ORG_B = 'org_beta';
@@ -118,12 +124,17 @@ describe('tenant-partitioned recall (the isolation proof)', () => {
    * the moment the harness fixes it. In PRODUCTION Convex, a document
    * without the vector field is simply absent from the vector index — a
    * same-tenant record with no embedding can never appear in (or affect)
-   * recall. convex-test's fake instead iterates every filter-matching doc
-   * and computes cosine against `doc.embedding`, crashing on `undefined`
-   * (verified in its source: `vectorSearch` → `cosineSimilarity(vector,
-   * doc[vectorField])` with no field-presence check). If this test ever
-   * FAILS, convex-test has fixed the gap — replace it with the real
-   * assertion: recall returns only 'a/close'.
+   * recall. This is the AUTHORITATIVE production behavior, per Convex's vector
+   * search docs: "Only documents that contain a vector of the size and in the
+   * field specified by a vector index will be included in the index and
+   * returned by the vector search"
+   * (https://docs.convex.dev/search/vector-search). convex-test's fake instead
+   * iterates every filter-matching doc and computes cosine against
+   * `doc.embedding`, crashing on `undefined` (verified in its source:
+   * `vectorSearch` → `cosineSimilarity(vector, doc[vectorField])` with no
+   * field-presence check). Production behavior is documented; the crash is
+   * purely the fake's gap. If this test ever FAILS, convex-test has fixed the
+   * gap — replace it with the real assertion: recall returns only 'a/close'.
    */
   test('KNOWN convex-test gap: a same-tenant record without an embedding crashes the FAKE vector search (production ignores it)', async () => {
     const t = initConvexTest();

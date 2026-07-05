@@ -62,7 +62,7 @@ export const setRedaction = mutation({
     }
     const correlationId = resolveCorrelationId(args.correlationId);
     const target = args.targetSubject ?? null;
-    const redactionDigest = digestRedaction(target, args.fields);
+    const redactionDigest = await digestRedaction(target, args.fields);
 
     if (
       args.claimedOrgCode !== undefined &&

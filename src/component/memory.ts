@@ -55,6 +55,11 @@ import {embeddingProblem, topKProblem} from './lib/embedding.js';
 import {fail, requireNonEmpty} from './lib/errors.js';
 import {isOperationPermitted} from './lib/grantStore.js';
 import {
+  resolveRevocation,
+  revocationDenial,
+  revocationMessage
+} from './lib/revocationStore.js';
+import {
   egressMemories,
   egressMemory,
   resolveRedaction
@@ -155,7 +160,7 @@ export const write = mutation({
     requireNonEmpty(args.subject, 'subject');
     requireNonEmpty(args.key, 'key');
     const correlationId = resolveCorrelationId(args.correlationId);
-    const keyDigest = digestKey(args.key);
+    const keyDigest = await digestKey(args.key);
 
     // Tenant-context conflict: checked BEFORE any memory access.
     if (
@@ -171,6 +176,19 @@ export const write = mutation({
         keyDigest,
         correlationId
       );
+    }
+
+    // Revocation overlay (P5): after the tenant check, BEFORE the scope gate.
+    // Outranks grants — a revoked caller is denied here whatever scopes it holds.
+    const writeRevoked = await revocationDenial(
+      ctx.db,
+      'write',
+      args,
+      keyDigest,
+      correlationId
+    );
+    if (writeRevoked !== null) {
+      return writeRevoked;
     }
 
     // Scope gate (P4): after the tenant check, before any memories access.
@@ -318,7 +336,7 @@ export const get = mutation({
     requireNonEmpty(args.subject, 'subject');
     requireNonEmpty(args.key, 'key');
     const correlationId = resolveCorrelationId(args.correlationId);
-    const keyDigest = digestKey(args.key);
+    const keyDigest = await digestKey(args.key);
 
     if (
       args.claimedOrgCode !== undefined &&
@@ -333,6 +351,18 @@ export const get = mutation({
         keyDigest,
         correlationId
       );
+    }
+
+    // Revocation overlay (P5): after the tenant check, BEFORE the scope gate.
+    const getRevoked = await revocationDenial(
+      ctx.db,
+      'get',
+      args,
+      keyDigest,
+      correlationId
+    );
+    if (getRevoked !== null) {
+      return getRevoked;
     }
 
     // Scope gate (P4): after the tenant check, before any memories access.
@@ -400,7 +430,7 @@ export const list = mutation({
       fail('invalid_argument', 'paginationOpts.numItems must be positive.');
     }
     const correlationId = resolveCorrelationId(args.correlationId);
-    const filterDigest = digestFilter(args.filter);
+    const filterDigest = await digestFilter(args.filter);
 
     if (
       args.claimedOrgCode !== undefined &&
@@ -415,6 +445,18 @@ export const list = mutation({
         filterDigest,
         correlationId
       );
+    }
+
+    // Revocation overlay (P5): after the tenant check, BEFORE the scope gate.
+    const listRevoked = await revocationDenial(
+      ctx.db,
+      'list',
+      args,
+      filterDigest,
+      correlationId
+    );
+    if (listRevoked !== null) {
+      return listRevoked;
     }
 
     // Scope gate (P4): after the tenant check, before any memories access.
@@ -504,21 +546,49 @@ async function denyRecall(
 }
 
 /**
- * The recall action's scope gate (P4). Actions cannot touch the db, so the
- * grant lookup runs in this internal mutation; when the scope is missing it
- * ALSO commits the denial's one audit row in the same transaction, so a
- * scope-denied recall audits exactly once (this is then the only mutation
- * that recall runs).
+ * The recall action's COMBINED gate (P5 revocation overlay + P4 scope gate).
+ * Actions cannot touch the db, so both the revocation lookup and the grant
+ * lookup run in this one internal mutation, in the mandated order — REVOCATION
+ * FIRST (it outranks grants), scope second. Whichever denies ALSO commits the
+ * denial's one audit row in the same transaction, so a denied recall audits
+ * exactly once (this is then the only mutation that recall runs). Returns a
+ * discriminated result so the action re-raises the exact code/message.
  */
-export const ensureRecallScope = internalMutation({
+export const ensureRecallAccess = internalMutation({
   args: {
     orgCode: v.string(),
     subject: v.string(),
     keyOrQueryDigest: v.string(),
     correlationId: v.string()
   },
-  returns: v.object({permitted: v.boolean()}),
+  returns: v.union(
+    v.object({permitted: v.literal(true)}),
+    v.object({
+      permitted: v.literal(false),
+      code: v.union(v.literal('revoked'), v.literal('scope_not_granted')),
+      message: v.string()
+    })
+  ),
   handler: async (ctx, args) => {
+    // Revocation overlay FIRST: outranks the scope gate.
+    const level = await resolveRevocation(ctx.db, args.orgCode, args.subject);
+    if (level !== null) {
+      await recordAudit(ctx.db, {
+        orgCode: args.orgCode,
+        subject: args.subject,
+        operation: 'recall',
+        decision: 'denied',
+        reasonCode: 'revoked',
+        keyOrQueryDigest: args.keyOrQueryDigest,
+        correlationId: args.correlationId,
+        mandateId: null
+      });
+      return {
+        permitted: false as const,
+        code: 'revoked' as const,
+        message: revocationMessage(level)
+      };
+    }
     const permitted = await isOperationPermitted(
       ctx.db,
       args.orgCode,
@@ -536,8 +606,14 @@ export const ensureRecallScope = internalMutation({
         correlationId: args.correlationId,
         mandateId: null
       });
+      return {
+        permitted: false as const,
+        code: 'scope_not_granted' as const,
+        message:
+          "The subject has no active grant of the 'memory.recall' scope in this tenant."
+      };
     }
-    return {permitted};
+    return {permitted: true as const};
   }
 });
 
@@ -633,6 +709,16 @@ export const finalizeRecall = internalMutation({
  * returned to the caller; the vector search that produced the hits ran just
  * before that mutation, outside its transaction.
  *
+ * CRASH-GAP, and why it is SAFE: if the action dies between the vector search
+ * and `finalizeRecall`, the caller receives NOTHING — the action throws before
+ * returning, so no matches egress. The only casualty is the audit row: an
+ * attempted-but-crashed recall leaves none. This asymmetry is deliberate and
+ * accepted: no data can leave the component unaudited (the audit row and the
+ * returned matches are written together in `finalizeRecall`, or neither is);
+ * the sole loss is observability of a recall that crashed before returning
+ * anything. This is an accepted property of the action model — a recall's
+ * transactional half is one mutation, and a crash before it commits nothing.
+ *
  * Isolation mechanic: the `by_embedding` vector index declares
  * `filterFields: ['orgCode']` and the search ALWAYS carries the orgCode
  * filter, so other tenants' vectors are outside the searched partition — the
@@ -670,23 +756,20 @@ export const recall = action({
       );
     }
 
-    // Scope gate (P4): after the tenant check, before any search. The
-    // internal mutation audits the denial itself (one row, committed there).
-    const scopeCheck = await ctx.runMutation(
-      internal.memory.ensureRecallScope,
-      {
-        orgCode: args.orgCode,
-        subject: args.subject,
-        keyOrQueryDigest: describeRecall(args.topK),
-        correlationId
-      }
-    );
-    if (!scopeCheck.permitted) {
+    // Combined gate (P5 revocation overlay → P4 scope gate): after the tenant
+    // check, before any search. The internal mutation audits whichever denial
+    // fires itself (one row, committed there) and reports the exact code.
+    const gate = await ctx.runMutation(internal.memory.ensureRecallAccess, {
+      orgCode: args.orgCode,
+      subject: args.subject,
+      keyOrQueryDigest: describeRecall(args.topK),
+      correlationId
+    });
+    if (!gate.permitted) {
       return {
         ok: false as const,
-        code: 'scope_not_granted' as const,
-        message:
-          "The subject has no active grant of the 'memory.recall' scope in this tenant.",
+        code: gate.code,
+        message: gate.message,
         correlationId
       };
     }

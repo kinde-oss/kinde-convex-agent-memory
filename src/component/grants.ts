@@ -54,7 +54,7 @@ export const grant = mutation({
     requireNonEmpty(args.subject, 'subject');
     requireNonEmpty(args.targetSubject, 'targetSubject');
     const correlationId = resolveCorrelationId(args.correlationId);
-    const grantDigest = digestGrant(args.scope, args.targetSubject);
+    const grantDigest = await digestGrant(args.scope, args.targetSubject);
 
     if (
       args.claimedOrgCode !== undefined &&
@@ -132,7 +132,7 @@ export const revokeGrant = mutation({
     requireNonEmpty(args.subject, 'subject');
     requireNonEmpty(args.targetSubject, 'targetSubject');
     const correlationId = resolveCorrelationId(args.correlationId);
-    const grantDigest = digestGrant(args.scope, args.targetSubject);
+    const grantDigest = await digestGrant(args.scope, args.targetSubject);
 
     if (
       args.claimedOrgCode !== undefined &&

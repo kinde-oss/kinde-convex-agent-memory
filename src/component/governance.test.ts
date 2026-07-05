@@ -1,11 +1,17 @@
 /// <reference types="vite/client" />
-import {describe, expect, test} from 'vitest';
+import {beforeEach, describe, expect, test, vi} from 'vitest';
 import {api} from './_generated/api.js';
 import {EMBEDDING_DIMENSIONS} from './lib/embedding.js';
 import {CONTENT_REDACTED} from './lib/redaction.js';
-import {initConvexTest} from './setup.test.js';
+import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
+
+// Hardening: stub the declared signing secret before every test (file-scoped
+// hook; see setup.test.ts). Keys the grant/redaction audit digests asserted.
+beforeEach(() => {
+  vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
+});
 
 const ORG_A = 'org_alpha';
 const ORG_B = 'org_beta';

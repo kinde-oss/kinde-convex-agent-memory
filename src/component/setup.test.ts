@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import {beforeEach, expect, test} from 'vitest';
+import {beforeEach, expect, test, vi} from 'vitest';
 import {convexTest} from 'convex-test';
 import {ConvexError} from 'convex/values';
 import type {Value} from 'convex/values';
@@ -7,11 +7,17 @@ import schema from './schema.js';
 
 export const modules = import.meta.glob('./**/*.*s');
 
-// Hardening: stub ALL required component env vars before every test. The
-// component declares NONE yet (P0) — the moment convex.config.ts declares one,
-// its `vi.stubEnv` line is added here (and in every other test file).
+/**
+ * Hardening: stub ALL declared component env vars before every test. Each test
+ * file carries its OWN copy of this `beforeEach` (vitest hooks are file-scoped,
+ * so importing `initConvexTest` does NOT import this hook) — keep them in sync.
+ * `MEMORY_SIGNING_SECRET` keys the audit digests (see `lib/digest.ts`); stubbing
+ * it exercises the keyed HMAC path and keeps in-mutation digests correlating
+ * with any digest helpers a test computes directly.
+ */
+export const TEST_SIGNING_SECRET = 'test-signing-secret';
 beforeEach(() => {
-  // No component env vars declared yet.
+  vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
 });
 
 export function initConvexTest() {
