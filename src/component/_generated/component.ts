@@ -22,4 +22,85 @@ import type {FunctionReference} from 'convex/server';
  * ```
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
-  {};
+  {
+    memory: {
+      get: FunctionReference<
+        'mutation',
+        'internal',
+        {
+          claimedOrgCode?: string;
+          correlationId?: string;
+          key: string;
+          orgCode: string;
+          subject: string;
+        },
+        | {
+            correlationId: string;
+            memory: {
+              _creationTime: number;
+              _id: string;
+              content: string;
+              createdAt: number;
+              createdBy: string;
+              idempotencyKey: string | null;
+              key: string;
+              mandateId: string | null;
+              metadata?: Record<
+                string,
+                | string
+                | number
+                | boolean
+                | null
+                | Array<string | number | boolean | null>
+              >;
+              orgCode: string;
+              subject: string;
+              writtenAt: number;
+              writtenBy: string;
+            } | null;
+            ok: true;
+          }
+        | {
+            code: 'tenant_context_conflict' | 'idempotency_key_reused';
+            correlationId: string;
+            message: string;
+            ok: false;
+          },
+        Name
+      >;
+      write: FunctionReference<
+        'mutation',
+        'internal',
+        {
+          claimedOrgCode?: string;
+          content: string;
+          correlationId?: string;
+          idempotencyKey?: string;
+          key: string;
+          metadata?: Record<
+            string,
+            | string
+            | number
+            | boolean
+            | null
+            | Array<string | number | boolean | null>
+          >;
+          orgCode: string;
+          subject: string;
+        },
+        | {
+            correlationId: string;
+            memoryId: string;
+            ok: true;
+            outcome: 'created' | 'updated' | 'idempotent_replay';
+          }
+        | {
+            code: 'tenant_context_conflict' | 'idempotency_key_reused';
+            correlationId: string;
+            message: string;
+            ok: false;
+          },
+        Name
+      >;
+    };
+  };
