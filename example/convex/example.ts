@@ -45,6 +45,44 @@ export const writeMemory = mutation({
   }
 });
 
+/**
+ * Governed listing through the client: one page of the tenant's keys,
+ * optionally narrowed by a key prefix. Walk `continueCursor` until `isDone`.
+ */
+export const listMemories = mutation({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    claimedOrgCode: v.optional(v.string()),
+    keyPrefix: v.optional(v.string()),
+    numItems: v.number(),
+    cursor: v.union(v.string(), v.null())
+  },
+  returns: v.object({
+    keys: v.array(v.string()),
+    isDone: v.boolean(),
+    continueCursor: v.string()
+  }),
+  handler: async (ctx, args) => {
+    const result = await agentMemory.list(ctx, {
+      subject: args.subject,
+      orgCode: args.orgCode,
+      ...(args.claimedOrgCode === undefined
+        ? {}
+        : {claimedOrgCode: args.claimedOrgCode}),
+      ...(args.keyPrefix === undefined
+        ? {}
+        : {filter: {keyPrefix: args.keyPrefix}}),
+      paginationOpts: {numItems: args.numItems, cursor: args.cursor}
+    });
+    return {
+      keys: result.page.map((memory) => memory.key),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor
+    };
+  }
+});
+
 /** Governed read-by-key through the client (null when absent IN THIS TENANT). */
 export const getMemory = mutation({
   args: {

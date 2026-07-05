@@ -36,6 +36,45 @@ test('write → get roundtrip through the AgentMemory client', async () => {
   expect(crossTenant).toBeNull();
 });
 
+test('listMemories pages through the tenant via the client', async () => {
+  const t = initConvexTest();
+  for (const key of ['notes/1', 'notes/2', 'prefs/theme']) {
+    await t.mutation(api.example.writeMemory, {
+      subject: 'user_alice',
+      orgCode: 'org_alpha',
+      key,
+      content: 'c'
+    });
+  }
+  await t.mutation(api.example.writeMemory, {
+    subject: 'user_bob',
+    orgCode: 'org_beta',
+    key: 'notes/9',
+    content: 'c'
+  });
+
+  async function fetchPage(pageCursor: string | null) {
+    return await t.mutation(api.example.listMemories, {
+      subject: 'user_alice',
+      orgCode: 'org_alpha',
+      keyPrefix: 'notes/',
+      numItems: 1,
+      cursor: pageCursor
+    });
+  }
+
+  const keys: string[] = [];
+  let cursor: string | null = null;
+  let isDone = false;
+  while (!isDone) {
+    const page = await fetchPage(cursor);
+    keys.push(...page.keys);
+    isDone = page.isDone;
+    cursor = page.continueCursor;
+  }
+  expect(keys.sort()).toEqual(['notes/1', 'notes/2']);
+});
+
 test('a tenant context conflict surfaces as a typed ConvexError from the client', async () => {
   const t = initConvexTest();
   let error: unknown;

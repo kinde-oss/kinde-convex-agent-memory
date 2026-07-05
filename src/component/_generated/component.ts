@@ -61,7 +61,76 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             ok: true;
           }
         | {
-            code: 'tenant_context_conflict' | 'idempotency_key_reused';
+            code:
+              | 'tenant_context_conflict'
+              | 'idempotency_key_reused'
+              | 'invalid_filter';
+            correlationId: string;
+            message: string;
+            ok: false;
+          },
+        Name
+      >;
+      list: FunctionReference<
+        'mutation',
+        'internal',
+        {
+          claimedOrgCode?: string;
+          correlationId?: string;
+          filter?: {
+            bySubject?: string;
+            keyPrefix?: string;
+            metadataEquals?: {
+              field: string;
+              value: string | number | boolean | null;
+            };
+            writtenAfter?: number;
+            writtenBefore?: number;
+          };
+          orgCode: string;
+          paginationOpts: {
+            cursor: string | null;
+            endCursor?: string | null;
+            id?: number;
+            maximumBytesRead?: number;
+            maximumRowsRead?: number;
+            numItems: number;
+          };
+          subject: string;
+        },
+        | {
+            continueCursor: string;
+            correlationId: string;
+            isDone: boolean;
+            ok: true;
+            page: Array<{
+              _creationTime: number;
+              _id: string;
+              content: string;
+              createdAt: number;
+              createdBy: string;
+              idempotencyKey: string | null;
+              key: string;
+              mandateId: string | null;
+              metadata?: Record<
+                string,
+                | string
+                | number
+                | boolean
+                | null
+                | Array<string | number | boolean | null>
+              >;
+              orgCode: string;
+              subject: string;
+              writtenAt: number;
+              writtenBy: string;
+            }>;
+          }
+        | {
+            code:
+              | 'tenant_context_conflict'
+              | 'idempotency_key_reused'
+              | 'invalid_filter';
             correlationId: string;
             message: string;
             ok: false;
@@ -95,7 +164,10 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             outcome: 'created' | 'updated' | 'idempotent_replay';
           }
         | {
-            code: 'tenant_context_conflict' | 'idempotency_key_reused';
+            code:
+              | 'tenant_context_conflict'
+              | 'idempotency_key_reused'
+              | 'invalid_filter';
             correlationId: string;
             message: string;
             ok: false;

@@ -19,9 +19,12 @@
  * resolve tenant context, correlation, and audit, and contain NO direct
  * `memories` queries of their own.
  */
+import {paginator} from 'convex-helpers/server/pagination';
+import type {PaginationOptions} from 'convex/server';
+import schema from './schema.js';
 import type {MutationCtx, QueryCtx} from './_generated/server.js';
 import type {Doc, Id} from './_generated/dataModel.js';
-import type {MemoryMetadata} from './validators.js';
+import type {ListFilter, MemoryMetadata} from './validators.js';
 
 type Db = QueryCtx['db'];
 type WriteDb = MutationCtx['db'];
@@ -59,6 +62,168 @@ export async function getMemoryByIdempotencyKey(
       q.eq('orgCode', orgCode).eq('idempotencyKey', idempotencyKey)
     )
     .unique();
+}
+
+/*
+ * THE FILTER MODEL — two tiers, documented here because this is the module
+ * that guarantees the distinction:
+ *
+ * 1. INDEX RANGE — what the tenant-leading indexes can express. Exactly one
+ *    index carries each list call, chosen in this precedence order:
+ *      - `bySubject`  → `by_org_subject` (orgCode, subject): both equalities
+ *        ride the index.
+ *      - `keyPrefix`  → `by_org_key` (orgCode, key): the prefix rides as the
+ *        range [prefix, successor(prefix)).
+ *      - otherwise    → `by_org` (orgCode).
+ *    In EVERY case the range's leading term is `.eq('orgCode', …)` — the
+ *    tenant constraint is part of the range itself.
+ *
+ * 2. IN-RANGE REFINEMENT — everything a range cannot express (`writtenAfter`/
+ *    `writtenBefore` over writtenAt, `metadataEquals`, and whichever of
+ *    `bySubject`/`keyPrefix` did not win the index) is applied in-memory to
+ *    rows ALREADY INSIDE the tenant-scoped range. Refinement can only ever
+ *    SHRINK the row set. A refined page may therefore hold fewer than
+ *    `numItems` rows while `isDone` is still false; callers walk
+ *    `continueCursor` until `isDone` (the standard Convex pattern).
+ *
+ * NEVER ACCEPTABLE: widening the range beyond the tenant to satisfy a filter.
+ * No filter shape can influence the leading `.eq('orgCode', …)` term.
+ */
+
+/**
+ * The tightest string upper bound for "starts with `prefix`": the rightmost
+ * code unit below 0xFFFF is incremented and everything after it dropped, so
+ * [prefix, bound) covers exactly the strings extending `prefix`. Null when no
+ * finite bound exists (a prefix of only 0xFFFF units) — the range then stays
+ * lower-bounded only, and in-range refinement still enforces the prefix.
+ */
+function keyPrefixUpperBound(prefix: string): string | null {
+  for (let i = prefix.length - 1; i >= 0; i--) {
+    const code = prefix.charCodeAt(i);
+    if (code < 0xffff) {
+      return prefix.slice(0, i) + String.fromCharCode(code + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * In-range refinement (tier 2 of the filter model). Applied to every row the
+ * index range returned — including belt-and-braces re-checks of conditions the
+ * range already narrowed, which costs nothing per row and keeps correctness
+ * independent of index-boundary subtleties.
+ */
+function matchesInRange(doc: Doc<'memories'>, filter: ListFilter): boolean {
+  if (filter.bySubject !== undefined && doc.subject !== filter.bySubject) {
+    return false;
+  }
+  if (filter.keyPrefix !== undefined && !doc.key.startsWith(filter.keyPrefix)) {
+    return false;
+  }
+  if (
+    filter.writtenAfter !== undefined &&
+    doc.writtenAt <= filter.writtenAfter
+  ) {
+    return false;
+  }
+  if (
+    filter.writtenBefore !== undefined &&
+    doc.writtenAt >= filter.writtenBefore
+  ) {
+    return false;
+  }
+  if (filter.metadataEquals !== undefined) {
+    const stored = doc.metadata?.[filter.metadataEquals.field];
+    if (stored === undefined || Array.isArray(stored)) {
+      return false;
+    }
+    if (stored !== filter.metadataEquals.value) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Detect a contradictory filter — arguments that cannot be satisfied, or
+ * filter values that are present but unusable. Returns the human-readable
+ * reason, or null for a satisfiable filter. Contradictions are DENIED typed by
+ * the public wrapper, never silently coerced into an empty result.
+ */
+export function filterContradiction(
+  filter: ListFilter | undefined
+): string | null {
+  if (filter === undefined) {
+    return null;
+  }
+  if (filter.bySubject === '') {
+    return 'bySubject must be a non-empty string when supplied.';
+  }
+  if (filter.keyPrefix === '') {
+    return 'keyPrefix must be a non-empty string when supplied.';
+  }
+  if (
+    filter.metadataEquals !== undefined &&
+    filter.metadataEquals.field === ''
+  ) {
+    return 'metadataEquals.field must be a non-empty string when supplied.';
+  }
+  if (
+    filter.writtenAfter !== undefined &&
+    filter.writtenBefore !== undefined &&
+    filter.writtenAfter >= filter.writtenBefore
+  ) {
+    return 'The (writtenAfter, writtenBefore) window is empty: writtenAfter must be strictly less than writtenBefore (both bounds are exclusive).';
+  }
+  return null;
+}
+
+export interface ListPage {
+  page: Doc<'memories'>[];
+  isDone: boolean;
+  continueCursor: string;
+}
+
+/**
+ * Paginated, tenant-scoped listing (see THE FILTER MODEL above). Pagination
+ * uses convex-helpers' `paginator`, which walks a plain index range with plain
+ * cursors — no reactivity journal — so it is safe inside this component's
+ * mutations. The cursor walks the TENANT-SCOPED range only: a page boundary
+ * can never step outside the leading `.eq('orgCode', …)` term, so pagination
+ * cannot cross into another tenant's rows.
+ */
+export async function listMemories(
+  db: Db,
+  orgCode: string,
+  filter: ListFilter,
+  paginationOpts: PaginationOptions
+): Promise<ListPage> {
+  const query = paginator(db, schema).query('memories');
+  const subject = filter.bySubject;
+  const prefix = filter.keyPrefix;
+  let ranged;
+  if (subject !== undefined) {
+    ranged = query.withIndex('by_org_subject', (q) =>
+      q.eq('orgCode', orgCode).eq('subject', subject)
+    );
+  } else if (prefix !== undefined && prefix !== '') {
+    const upper = keyPrefixUpperBound(prefix);
+    ranged = query.withIndex('by_org_key', (q) => {
+      const lower = q.eq('orgCode', orgCode).gte('key', prefix);
+      return upper === null ? lower : lower.lt('key', upper);
+    });
+  } else {
+    ranged = query.withIndex('by_org', (q) => q.eq('orgCode', orgCode));
+  }
+  const result = await ranged.paginate({
+    numItems: paginationOpts.numItems,
+    cursor: paginationOpts.cursor
+  });
+  return {
+    page: result.page.filter((doc) => matchesInRange(doc, filter)),
+    isDone: result.isDone,
+    continueCursor: result.continueCursor
+  };
 }
 
 export interface InsertMemoryInput {

@@ -23,3 +23,36 @@ function hash8(input: string): string {
 export function digestKey(key: string): string {
   return `v1:key:${hash8(key)}`;
 }
+
+/**
+ * Deterministic serialization: object keys sorted at every depth, `undefined`
+ * members dropped, so semantically equal filters always serialize — and hash —
+ * identically.
+ */
+function stableStringify(value: unknown): string {
+  if (value === undefined) {
+    return 'undefined';
+  }
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, member]) => member !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, member]) => `${JSON.stringify(k)}:${stableStringify(member)}`);
+  return `{${entries.join(',')}}`;
+}
+
+/**
+ * Stable, redacted digest of a WHOLE list filter for the audit trail. The
+ * filter is fingerprinted as one object — its raw values (a key prefix, a
+ * subject, a metadata value: all potentially content-bearing) are DROPPED and
+ * never appear in an audit row. Deterministic: the same filter always yields
+ * the same digest, so audit rows correlate.
+ */
+export function digestFilter(filter: unknown): string {
+  return `v1:filter:${hash8(stableStringify(filter ?? {}))}`;
+}

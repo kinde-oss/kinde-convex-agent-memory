@@ -21,13 +21,21 @@ type WriteArgs = FunctionArgs<ComponentApi['memory']['write']>;
 type WriteResult = FunctionReturnType<ComponentApi['memory']['write']>;
 type GetArgs = FunctionArgs<ComponentApi['memory']['get']>;
 type GetResult = FunctionReturnType<ComponentApi['memory']['get']>;
+type ListArgs = FunctionArgs<ComponentApi['memory']['list']>;
+type ListResult = FunctionReturnType<ComponentApi['memory']['list']>;
 
 /** Arguments to {@link AgentMemory.write}. */
 export type MemoryWriteArgs = WriteArgs;
 /** Arguments to {@link AgentMemory.get}. */
 export type MemoryGetArgs = GetArgs;
+/** Arguments to {@link AgentMemory.list}. */
+export type MemoryListArgs = ListArgs;
 /** A successful write: the record id, how it resolved, the correlation id. */
 export type MemoryWriteOk = Extract<WriteResult, {ok: true}>;
+/** One successful list page: rows, pagination state, correlation id. */
+export type MemoryListOk = Extract<ListResult, {ok: true}>;
+/** The list filter shape (plain data, closed object). */
+export type MemoryListFilter = NonNullable<ListArgs['filter']>;
 /** A full memory record, as returned by governed reads. */
 export type MemoryRecord = NonNullable<
   Extract<GetResult, {ok: true}>['memory']
@@ -172,5 +180,21 @@ export class AgentMemory {
       throwDenied(result);
     }
     return result.memory;
+  }
+
+  /**
+   * Governed, paginated listing over the tenant's memories. Standard Convex
+   * pagination: pass `{numItems, cursor}` and walk `continueCursor` until
+   * `isDone` (after in-range refinement a page may hold fewer than `numItems`
+   * rows while `isDone` is still false). Throws a typed ConvexError
+   * (`tenant_context_conflict`, `invalid_filter`) on a governed denial, after
+   * the denial's audit row has committed.
+   */
+  async list(ctx: RunMutationCtx, args: MemoryListArgs): Promise<MemoryListOk> {
+    const result = await ctx.runMutation(this.component.memory.list, args);
+    if (!result.ok) {
+      throwDenied(result);
+    }
+    return result;
   }
 }

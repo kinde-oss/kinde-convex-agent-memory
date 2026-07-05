@@ -22,7 +22,11 @@ export type MemoryMetadata = Infer<typeof metadataValidator>;
 export const nullableString = v.union(v.string(), v.null());
 
 /** The governed operations audited today; later phases extend this union. */
-export const operationValidator = v.union(v.literal('write'), v.literal('get'));
+export const operationValidator = v.union(
+  v.literal('write'),
+  v.literal('get'),
+  v.literal('list')
+);
 export type MemoryOperation = Infer<typeof operationValidator>;
 
 export const auditDecisionValidator = v.union(
@@ -42,7 +46,8 @@ export type WriteOutcome = Infer<typeof writeOutcomeValidator>;
 /** Machine-readable codes a governed operation can be denied with. */
 export const deniedCodeValidator = v.union(
   v.literal('tenant_context_conflict'),
-  v.literal('idempotency_key_reused')
+  v.literal('idempotency_key_reused'),
+  v.literal('invalid_filter')
 );
 export type DeniedCode = Infer<typeof deniedCodeValidator>;
 
@@ -58,8 +63,10 @@ export const auditReasonValidator = v.union(
   v.literal('idempotent_replay'),
   v.literal('found'),
   v.literal('not_found'),
+  v.literal('listed'),
   v.literal('tenant_context_conflict'),
-  v.literal('idempotency_key_reused')
+  v.literal('idempotency_key_reused'),
+  v.literal('invalid_filter')
 );
 export type AuditReason = Infer<typeof auditReasonValidator>;
 
@@ -116,3 +123,44 @@ export const getResultValidator = v.union(
   deniedResultValidator
 );
 export type GetResult = Infer<typeof getResultValidator>;
+
+/**
+ * The list filter: plain data, never predicates, and a CLOSED object — every
+ * shape the governed path can be asked for is enumerated here. How each field
+ * is applied (index range vs in-range refinement) is access.ts's contract.
+ * `metadataEquals` matches an exactly-equal primitive metadata value (a stored
+ * array never matches; an absent field never matches, including `value: null`,
+ * which matches only a stored explicit null).
+ */
+export const listFilterValidator = v.object({
+  bySubject: v.optional(v.string()),
+  keyPrefix: v.optional(v.string()),
+  /** Exclusive lower bound on `writtenAt` (strictly after). */
+  writtenAfter: v.optional(v.number()),
+  /** Exclusive upper bound on `writtenAt` (strictly before). */
+  writtenBefore: v.optional(v.number()),
+  metadataEquals: v.optional(
+    v.object({
+      field: v.string(),
+      value: v.union(v.string(), v.number(), v.boolean(), v.null())
+    })
+  )
+});
+export type ListFilter = Infer<typeof listFilterValidator>;
+
+export const listResultValidator = v.union(
+  v.object({
+    ok: v.literal(true),
+    /**
+     * One tenant-scoped page. After in-range refinement a page may hold fewer
+     * than `numItems` rows (even zero) while `isDone` is still false — walk
+     * `continueCursor` until `isDone`, the standard Convex pattern.
+     */
+    page: v.array(memoryRecordValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+    correlationId: v.string()
+  }),
+  deniedResultValidator
+);
+export type ListResult = Infer<typeof listResultValidator>;

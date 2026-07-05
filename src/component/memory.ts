@@ -25,19 +25,24 @@
  * audited. Neither value is ever silently preferred.
  */
 import {mutation} from './_generated/server.js';
+import {paginationOptsValidator} from 'convex/server';
 import {v} from 'convex/values';
 import {
+  filterContradiction,
   getMemoryByIdempotencyKey,
   getMemoryByKey,
   insertMemory,
+  listMemories,
   updateMemoryContent
 } from './access.js';
 import {recordAudit} from './lib/audit.js';
 import {resolveCorrelationId} from './lib/correlation.js';
-import {digestKey} from './lib/digest.js';
+import {digestFilter, digestKey} from './lib/digest.js';
 import {fail} from './lib/errors.js';
 import {
   getResultValidator,
+  listFilterValidator,
+  listResultValidator,
   metadataValidator,
   writeResultValidator
 } from './validators.js';
@@ -262,5 +267,87 @@ export const get = mutation({
       mandateId: null
     });
     return {ok: true as const, memory, correlationId};
+  }
+});
+
+/**
+ * Governed, paginated listing over the tenant's memories. The filter is plain
+ * data (a closed validator — see `listFilterValidator`); how each field is
+ * applied — index range vs in-range refinement — is `access.ts`'s documented
+ * contract. Standard Convex pagination shape in and out; after refinement a
+ * page may hold fewer than `numItems` rows while `isDone` is false — walk
+ * `continueCursor` until `isDone`. A contradictory filter denies typed
+ * `invalid_filter`, never a silent empty result. Exactly one audit row per
+ * call (operation `list`), carrying a digest of the WHOLE filter object —
+ * raw filter values (prefixes, subjects, metadata values) never reach audit.
+ */
+export const list = mutation({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    claimedOrgCode: v.optional(v.string()),
+    filter: v.optional(listFilterValidator),
+    paginationOpts: paginationOptsValidator,
+    correlationId: v.optional(v.string())
+  },
+  returns: listResultValidator,
+  handler: async (ctx, args) => {
+    requireNonEmpty(args.orgCode, 'orgCode');
+    requireNonEmpty(args.subject, 'subject');
+    if (args.paginationOpts.numItems <= 0) {
+      fail('invalid_argument', 'paginationOpts.numItems must be positive.');
+    }
+    const correlationId = resolveCorrelationId(args.correlationId);
+    const filterDigest = digestFilter(args.filter);
+
+    if (
+      args.claimedOrgCode !== undefined &&
+      args.claimedOrgCode !== args.orgCode
+    ) {
+      return await deny(
+        ctx.db,
+        'list',
+        args,
+        'tenant_context_conflict',
+        'The claimed org code does not match the server-verified tenant context.',
+        filterDigest,
+        correlationId
+      );
+    }
+
+    const contradiction = filterContradiction(args.filter);
+    if (contradiction !== null) {
+      return await deny(
+        ctx.db,
+        'list',
+        args,
+        'invalid_filter',
+        contradiction,
+        filterDigest,
+        correlationId
+      );
+    }
+
+    const {page, isDone, continueCursor} = await listMemories(
+      ctx.db,
+      args.orgCode,
+      args.filter ?? {},
+      args.paginationOpts
+    );
+
+    // P4 REDACTION SEAM: policy-based redaction-on-read will apply to `page`
+    // HERE — inside the governed path, before rows leave it. Not pre-built.
+
+    await recordAudit(ctx.db, {
+      orgCode: args.orgCode,
+      subject: args.subject,
+      operation: 'list',
+      decision: 'ok',
+      reasonCode: 'listed',
+      keyOrQueryDigest: filterDigest,
+      correlationId,
+      mandateId: null
+    });
+    return {ok: true as const, page, isDone, continueCursor, correlationId};
   }
 });
