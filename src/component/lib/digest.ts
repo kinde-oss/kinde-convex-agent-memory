@@ -56,3 +56,16 @@ function stableStringify(value: unknown): string {
 export function digestFilter(filter: unknown): string {
   return `v1:filter:${hash8(stableStringify(filter ?? {}))}`;
 }
+
+/**
+ * Audit descriptor for a RECALL. The query VECTOR is the content-bearing part
+ * of a recall and it never reaches this function — the descriptor records only
+ * the requested `topK` and (once known) the result count, neither of which
+ * carries content, so no hashing is needed. Denials audit before any search
+ * runs, so their descriptor has no result count.
+ */
+export function describeRecall(topK: number, resultCount?: number): string {
+  return resultCount === undefined
+    ? `v1:recall:topK=${topK}`
+    : `v1:recall:topK=${topK},results=${resultCount}`;
+}

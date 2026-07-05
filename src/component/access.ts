@@ -3,10 +3,13 @@
  *
  * CONTRACT — every read and write of the `memories` table, in this phase and
  * every later one (query, recall, redaction, revocation), flows through THIS
- * MODULE and no other. Grep-verifiable: `db.query('memories')` and
- * `db.insert('memories')` appear in this file only (enforced by
+ * MODULE and no other. Grep-verifiable: `db.query('memories')`,
+ * `db.insert('memories')`, `db.get('memories', …)`, and
+ * `ctx.vectorSearch('memories', …)` appear in this file only (enforced by
  * `structure.test.ts`; production modules only — tests inspect table state
- * directly by design, and `schema.ts` merely defines the table).
+ * directly by design, and `schema.ts` merely defines the table). Id-based
+ * fetches always use the table-scoped `db.get('memories', id)` overload so
+ * the grep sees them too.
  *
  * Every function here takes the SERVER-VERIFIED tenant context (`orgCode`)
  * and applies it AT THE QUERY, as the leading `.eq('orgCode', …)` of a
@@ -22,7 +25,8 @@
 import {paginator} from 'convex-helpers/server/pagination';
 import type {PaginationOptions} from 'convex/server';
 import schema from './schema.js';
-import type {MutationCtx, QueryCtx} from './_generated/server.js';
+import {fail} from './lib/errors.js';
+import type {ActionCtx, MutationCtx, QueryCtx} from './_generated/server.js';
 import type {Doc, Id} from './_generated/dataModel.js';
 import type {ListFilter, MemoryMetadata} from './validators.js';
 
@@ -226,12 +230,70 @@ export async function listMemories(
   };
 }
 
+/**
+ * TENANT-PARTITIONED VECTOR SEARCH. `ctx.vectorSearch` exists only in
+ * ACTIONS (a Convex platform rule — mutations cannot vector-search), so this
+ * is the one function in the governed path that takes an `ActionCtx` instead
+ * of a db handle. The isolation mechanic is unchanged in spirit: the
+ * `by_embedding` vector index declares `filterFields: ['orgCode']` and this
+ * function ALWAYS supplies the orgCode filter, so the search runs inside the
+ * tenant's partition of the index — other tenants' vectors are outside the
+ * searched set, never post-filtered out of the results. Returns (id, score)
+ * pairs ordered by similarity DESCENDING; the caller re-fetches the docs
+ * through `getMemoriesByIds` inside a mutation.
+ */
+export async function searchMemoriesByEmbedding(
+  ctx: ActionCtx,
+  orgCode: string,
+  embedding: number[],
+  limit: number
+): Promise<Array<{_id: Id<'memories'>; _score: number}>> {
+  return await ctx.vectorSearch('memories', 'by_embedding', {
+    vector: embedding,
+    limit,
+    filter: (q) => q.eq('orgCode', orgCode)
+  });
+}
+
+/**
+ * Fetch memories by id with a BELT-AND-BRACES tenant re-check. The ids come
+ * from `searchMemoriesByEmbedding`, whose orgCode filter already partitions
+ * the search — so a fetched doc whose orgCode differs from the caller's
+ * tenant context should be IMPOSSIBLE. If one ever appears, that is a hard
+ * isolation-invariant violation and this function fails LOUDLY with a typed
+ * code — it is never silently dropped. A null doc (deleted between the
+ * action's search and this mutation's fetch) is NOT a violation — the record
+ * genuinely no longer exists — and is dropped from the result.
+ */
+export async function getMemoriesByIds(
+  db: Db,
+  orgCode: string,
+  ids: Id<'memories'>[]
+): Promise<Map<Id<'memories'>, Doc<'memories'>>> {
+  const docs = new Map<Id<'memories'>, Doc<'memories'>>();
+  for (const id of ids) {
+    const doc = await db.get('memories', id);
+    if (doc === null) {
+      continue;
+    }
+    if (doc.orgCode !== orgCode) {
+      fail(
+        'isolation_invariant_violation',
+        'A vector-search hit resolved to a document outside the tenant partition. This should be impossible; refusing to return any results.'
+      );
+    }
+    docs.set(id, doc);
+  }
+  return docs;
+}
+
 export interface InsertMemoryInput {
   orgCode: string;
   subject: string;
   key: string;
   content: string;
   metadata?: MemoryMetadata;
+  embedding?: number[];
   mandateId: string | null;
   idempotencyKey: string | null;
 }
@@ -252,6 +314,7 @@ export async function insertMemory(
     key: input.key,
     content: input.content,
     ...(input.metadata === undefined ? {} : {metadata: input.metadata}),
+    ...(input.embedding === undefined ? {} : {embedding: input.embedding}),
     createdBy: input.subject,
     createdAt: now,
     writtenBy: input.subject,
@@ -265,6 +328,11 @@ export interface UpdateMemoryInput {
   content: string;
   /** Omitted → the stored metadata is left unchanged (pass `{}` to clear). */
   metadata?: MemoryMetadata;
+  /**
+   * Omitted → the STORED embedding is KEPT (see the update-semantics note on
+   * `memory.write`); supplied → replaced.
+   */
+  embedding?: number[];
   writtenBy: string;
   mandateId: string | null;
   idempotencyKey: string | null;
@@ -286,6 +354,7 @@ export async function updateMemoryContent(
   await db.patch('memories', existing._id, {
     content: input.content,
     ...(input.metadata === undefined ? {} : {metadata: input.metadata}),
+    ...(input.embedding === undefined ? {} : {embedding: input.embedding}),
     writtenBy: input.writtenBy,
     writtenAt: now,
     mandateId: input.mandateId,

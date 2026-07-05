@@ -25,7 +25,8 @@ export const nullableString = v.union(v.string(), v.null());
 export const operationValidator = v.union(
   v.literal('write'),
   v.literal('get'),
-  v.literal('list')
+  v.literal('list'),
+  v.literal('recall')
 );
 export type MemoryOperation = Infer<typeof operationValidator>;
 
@@ -47,9 +48,22 @@ export type WriteOutcome = Infer<typeof writeOutcomeValidator>;
 export const deniedCodeValidator = v.union(
   v.literal('tenant_context_conflict'),
   v.literal('idempotency_key_reused'),
-  v.literal('invalid_filter')
+  v.literal('invalid_filter'),
+  v.literal('invalid_embedding'),
+  v.literal('invalid_topk')
 );
 export type DeniedCode = Infer<typeof deniedCodeValidator>;
+
+/**
+ * The denial codes a RECALL can produce — the subset of {@link DeniedCode}
+ * the recall action's denial-audit internal mutation accepts.
+ */
+export const recallDeniedCodeValidator = v.union(
+  v.literal('tenant_context_conflict'),
+  v.literal('invalid_embedding'),
+  v.literal('invalid_topk')
+);
+export type RecallDeniedCode = Infer<typeof recallDeniedCodeValidator>;
 
 /**
  * Every audit reason: write outcomes, read outcomes, and denial codes.
@@ -64,9 +78,12 @@ export const auditReasonValidator = v.union(
   v.literal('found'),
   v.literal('not_found'),
   v.literal('listed'),
+  v.literal('recalled'),
   v.literal('tenant_context_conflict'),
   v.literal('idempotency_key_reused'),
-  v.literal('invalid_filter')
+  v.literal('invalid_filter'),
+  v.literal('invalid_embedding'),
+  v.literal('invalid_topk')
 );
 export type AuditReason = Infer<typeof auditReasonValidator>;
 
@@ -79,6 +96,7 @@ export const memoryRecordValidator = v.object({
   key: v.string(),
   content: v.string(),
   metadata: v.optional(metadataValidator),
+  embedding: v.optional(v.array(v.float64())),
   createdBy: v.string(),
   createdAt: v.number(),
   writtenBy: v.string(),
@@ -147,6 +165,24 @@ export const listFilterValidator = v.object({
   )
 });
 export type ListFilter = Infer<typeof listFilterValidator>;
+
+/** One semantic-recall hit: the full record and its similarity score. */
+export const recallMatchValidator = v.object({
+  memory: memoryRecordValidator,
+  score: v.float64()
+});
+export type RecallMatch = Infer<typeof recallMatchValidator>;
+
+export const recallResultValidator = v.union(
+  v.object({
+    ok: v.literal(true),
+    /** Matches ordered by similarity score, DESCENDING (best first). */
+    matches: v.array(recallMatchValidator),
+    correlationId: v.string()
+  }),
+  deniedResultValidator
+);
+export type RecallResult = Infer<typeof recallResultValidator>;
 
 export const listResultValidator = v.union(
   v.object({

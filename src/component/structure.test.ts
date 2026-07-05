@@ -9,9 +9,13 @@ const sources = import.meta.glob('./**/*.ts', {
 }) as Record<string, string>;
 
 // A db-level access of the memories table, in every form the Convex API
-// offers: query, insert, and the explicit-table-name id operations.
+// offers: query, the explicit-table-name id operations (get included — the
+// governed path always uses the table-scoped `db.get('memories', id)`
+// overload precisely so this grep sees it), and vector search (P3:
+// `ctx.vectorSearch('memories', …)` is a READ of the table and is pinned to
+// access.ts like every other access).
 const MEMORY_TABLE_ACCESS =
-  /\.(?:query|insert|patch|replace|delete)\(\s*['"]memories['"]/;
+  /\.(?:query|get|insert|patch|replace|delete|vectorSearch)\(\s*['"]memories['"]/;
 
 /**
  * THE GOVERNED-ACCESS-PATH CONTRACT (see access.ts): the `memories` table is

@@ -1,7 +1,8 @@
 /**
- * PUBLIC API of the memory spine: governed `write` and `get` (read-by-key).
- * Thin wrappers over the governed access path (`access.ts`) — no direct
- * `memories` queries live here.
+ * PUBLIC API of the memory spine: governed `write`, `get` (read-by-key),
+ * `list`, and `recall` (semantic vector search). Thin wrappers over the
+ * governed access path (`access.ts`) — no direct `memories` queries live
+ * here.
  *
  * Two deliberate shapes:
  *
@@ -24,30 +25,44 @@
  * `tenant_context_conflict` BEFORE any memory access, and the denial is
  * audited. Neither value is ever silently preferred.
  */
-import {mutation} from './_generated/server.js';
+import {action, internalMutation, mutation} from './_generated/server.js';
+import {internal} from './_generated/api.js';
 import {paginationOptsValidator} from 'convex/server';
 import {v} from 'convex/values';
 import {
   filterContradiction,
+  getMemoriesByIds,
   getMemoryByIdempotencyKey,
   getMemoryByKey,
   insertMemory,
   listMemories,
+  searchMemoriesByEmbedding,
   updateMemoryContent
 } from './access.js';
 import {recordAudit} from './lib/audit.js';
 import {resolveCorrelationId} from './lib/correlation.js';
-import {digestFilter, digestKey} from './lib/digest.js';
+import {describeRecall, digestFilter, digestKey} from './lib/digest.js';
+import {embeddingProblem, topKProblem} from './lib/embedding.js';
 import {fail} from './lib/errors.js';
 import {
   getResultValidator,
   listFilterValidator,
   listResultValidator,
   metadataValidator,
+  recallDeniedCodeValidator,
+  recallMatchValidator,
+  recallResultValidator,
   writeResultValidator
 } from './validators.js';
-import type {DeniedCode, DeniedResult, MemoryOperation} from './validators.js';
-import type {MutationCtx} from './_generated/server.js';
+import type {
+  DeniedCode,
+  DeniedResult,
+  MemoryOperation,
+  RecallDeniedCode,
+  RecallMatch,
+  RecallResult
+} from './validators.js';
+import type {ActionCtx, MutationCtx} from './_generated/server.js';
 
 /** Reject blank identity fields — malformed calls never reach the spine. */
 function requireNonEmpty(value: string, name: string): void {
@@ -89,6 +104,23 @@ async function deny(
  * existing (orgCode, key) updates content as a NEW write-provenance event —
  * `writtenBy`/`writtenAt` re-stamp, `createdBy`/`createdAt` never change.
  * Exactly one audit row per call, replay and denial included.
+ *
+ * EMBEDDING INTAKE: `embedding` optionally carries the record's semantic
+ * vector — exactly `EMBEDDING_DIMENSIONS` finite numbers, validated with a
+ * typed `invalid_embedding` denial BEFORE any db access. The component never
+ * embeds; callers supply vectors (typically via the client's injected
+ * embedder).
+ *
+ * EMBEDDING UPDATE SEMANTICS (deliberate choice): updating a record KEEPS the
+ * stored embedding unless a new one is explicitly supplied — content and
+ * embedding are supplied together by callers that care about recall, and
+ * clearing on every content-only update would silently drop records out of
+ * vector search. THE HONEST CAVEAT: a content update WITHOUT a fresh
+ * embedding leaves the stored vector describing the OLD content; recall may
+ * then rank the record by text it no longer contains. Callers that update
+ * content should re-embed alongside it. (An idempotent replay ignores the
+ * supplied embedding entirely, like every other replayed field: the first
+ * write won.)
  */
 export const write = mutation({
   args: {
@@ -98,6 +130,7 @@ export const write = mutation({
     key: v.string(),
     content: v.string(),
     metadata: v.optional(metadataValidator),
+    embedding: v.optional(v.array(v.float64())),
     idempotencyKey: v.optional(v.string()),
     correlationId: v.optional(v.string())
   },
@@ -123,6 +156,22 @@ export const write = mutation({
         keyDigest,
         correlationId
       );
+    }
+
+    // Embedding validation: BEFORE any db access (idempotency lookup included).
+    if (args.embedding !== undefined) {
+      const embeddingIssue = embeddingProblem(args.embedding);
+      if (embeddingIssue !== null) {
+        return await deny(
+          ctx.db,
+          'write',
+          args,
+          'invalid_embedding',
+          embeddingIssue,
+          keyDigest,
+          correlationId
+        );
+      }
     }
 
     const now = Date.now();
@@ -181,6 +230,7 @@ export const write = mutation({
           key: args.key,
           content: args.content,
           ...(args.metadata === undefined ? {} : {metadata: args.metadata}),
+          ...(args.embedding === undefined ? {} : {embedding: args.embedding}),
           mandateId,
           idempotencyKey: args.idempotencyKey ?? null
         },
@@ -194,6 +244,7 @@ export const write = mutation({
         {
           content: args.content,
           ...(args.metadata === undefined ? {} : {metadata: args.metadata}),
+          ...(args.embedding === undefined ? {} : {embedding: args.embedding}),
           writtenBy: args.subject,
           mandateId,
           idempotencyKey: args.idempotencyKey ?? null
@@ -349,5 +400,191 @@ export const list = mutation({
       mandateId: null
     });
     return {ok: true as const, page, isDone, continueCursor, correlationId};
+  }
+});
+
+/**
+ * Audit one recall DENIAL and build the returned `DeniedResult`. Recall runs
+ * as an ACTION (a Convex platform rule: `ctx.vectorSearch` exists only there)
+ * and actions cannot write — so the denial's ONE audit row is committed by a
+ * dedicated internal mutation before the action returns the denial. The
+ * one-audit-row-per-operation invariant holds: a denied recall runs exactly
+ * this mutation and nothing else.
+ */
+async function denyRecall(
+  ctx: ActionCtx,
+  args: {orgCode: string; subject: string; topK: number},
+  code: RecallDeniedCode,
+  message: string,
+  correlationId: string
+): Promise<DeniedResult> {
+  await ctx.runMutation(internal.memory.recordRecallDenial, {
+    orgCode: args.orgCode,
+    subject: args.subject,
+    reasonCode: code,
+    keyOrQueryDigest: describeRecall(args.topK),
+    correlationId
+  });
+  return {ok: false, code, message, correlationId};
+}
+
+/** Commits the ONE audit row of a denied recall (see {@link denyRecall}). */
+export const recordRecallDenial = internalMutation({
+  args: {
+    orgCode: v.string(),
+    subject: v.string(),
+    reasonCode: recallDeniedCodeValidator,
+    keyOrQueryDigest: v.string(),
+    correlationId: v.string()
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await recordAudit(ctx.db, {
+      orgCode: args.orgCode,
+      subject: args.subject,
+      operation: 'recall',
+      decision: 'denied',
+      reasonCode: args.reasonCode,
+      keyOrQueryDigest: args.keyOrQueryDigest,
+      correlationId: args.correlationId,
+      mandateId: null
+    });
+    return null;
+  }
+});
+
+/**
+ * Second half of a successful recall: fetches the vector-search hits THROUGH
+ * the governed path (`getMemoriesByIds`, which re-checks every doc's orgCode
+ * and fails loudly with `isolation_invariant_violation` on any mismatch —
+ * never a silent drop), writes the recall's EXACTLY ONE audit row, and
+ * returns the matches in the action's score order (descending). The audit
+ * row records only the requested `topK` and the result count — never the
+ * query vector, never content. A hit whose document was deleted between the
+ * action's search and this mutation is dropped: the record genuinely no
+ * longer exists.
+ */
+export const finalizeRecall = internalMutation({
+  args: {
+    orgCode: v.string(),
+    subject: v.string(),
+    hits: v.array(v.object({id: v.id('memories'), score: v.float64()})),
+    topK: v.number(),
+    correlationId: v.string()
+  },
+  returns: v.array(recallMatchValidator),
+  handler: async (ctx, args): Promise<RecallMatch[]> => {
+    const docs = await getMemoriesByIds(
+      ctx.db,
+      args.orgCode,
+      args.hits.map((hit) => hit.id)
+    );
+    const matches: RecallMatch[] = [];
+    for (const hit of args.hits) {
+      const doc = docs.get(hit.id);
+      if (doc !== undefined) {
+        matches.push({memory: doc, score: hit.score});
+      }
+    }
+    await recordAudit(ctx.db, {
+      orgCode: args.orgCode,
+      subject: args.subject,
+      operation: 'recall',
+      decision: 'ok',
+      reasonCode: 'recalled',
+      keyOrQueryDigest: describeRecall(args.topK, matches.length),
+      correlationId: args.correlationId,
+      mandateId: null
+    });
+    return matches;
+  }
+});
+
+/**
+ * Governed semantic recall: tenant-partitioned vector search. An ACTION,
+ * because `ctx.vectorSearch` exists only in actions (mutations cannot
+ * vector-search) — the search itself therefore runs OUTSIDE any transaction.
+ * Everything transactional happens in ONE internal mutation per call:
+ * validation denials commit their audit row via `recordRecallDenial`; a
+ * successful search hands its (id, score) hits to `finalizeRecall`, which
+ * re-fetches the docs through the governed path (belt-and-braces orgCode
+ * re-check), writes the recall's exactly-one audit row, and returns the
+ * matches. HONESTY NOTE: the audit row records the recall whose results were
+ * returned to the caller; the vector search that produced the hits ran just
+ * before that mutation, outside its transaction.
+ *
+ * Isolation mechanic: the `by_embedding` vector index declares
+ * `filterFields: ['orgCode']` and the search ALWAYS carries the orgCode
+ * filter, so other tenants' vectors are outside the searched partition — the
+ * headline test proves a better-matching foreign row cannot appear.
+ *
+ * Denials RETURN (same contract as every governed operation); the client
+ * converts them into thrown typed ConvexErrors.
+ */
+export const recall = action({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    claimedOrgCode: v.optional(v.string()),
+    embedding: v.array(v.float64()),
+    topK: v.number(),
+    correlationId: v.optional(v.string())
+  },
+  returns: recallResultValidator,
+  handler: async (ctx, args): Promise<RecallResult> => {
+    requireNonEmpty(args.orgCode, 'orgCode');
+    requireNonEmpty(args.subject, 'subject');
+    const correlationId = resolveCorrelationId(args.correlationId);
+
+    // Tenant-context conflict: checked BEFORE anything else.
+    if (
+      args.claimedOrgCode !== undefined &&
+      args.claimedOrgCode !== args.orgCode
+    ) {
+      return await denyRecall(
+        ctx,
+        args,
+        'tenant_context_conflict',
+        'The claimed org code does not match the server-verified tenant context.',
+        correlationId
+      );
+    }
+
+    // Embedding and bound validation: BEFORE any search.
+    const embeddingIssue = embeddingProblem(args.embedding);
+    if (embeddingIssue !== null) {
+      return await denyRecall(
+        ctx,
+        args,
+        'invalid_embedding',
+        embeddingIssue,
+        correlationId
+      );
+    }
+    const topKIssue = topKProblem(args.topK);
+    if (topKIssue !== null) {
+      return await denyRecall(
+        ctx,
+        args,
+        'invalid_topk',
+        topKIssue,
+        correlationId
+      );
+    }
+
+    const hits = await searchMemoriesByEmbedding(
+      ctx,
+      args.orgCode,
+      args.embedding,
+      args.topK
+    );
+    const matches = await ctx.runMutation(internal.memory.finalizeRecall, {
+      orgCode: args.orgCode,
+      subject: args.subject,
+      hits: hits.map((hit) => ({id: hit._id, score: hit._score})),
+      topK: args.topK,
+      correlationId
+    });
+    return {ok: true as const, matches, correlationId};
   }
 });

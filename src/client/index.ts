@@ -5,13 +5,34 @@ import type {
   GenericDataModel
 } from 'convex/server';
 import {ConvexError} from 'convex/values';
+import {
+  embeddingProblem,
+  isWellFormedEmbedding
+} from '../component/lib/embedding.js';
 import type {ComponentApi} from '../component/_generated/component.js';
 
 export type {ComponentApi} from '../component/_generated/component.js';
+export {
+  DEFAULT_RECALL_TOP_K,
+  EMBEDDING_DIMENSIONS,
+  MAX_RECALL_TOP_K
+} from '../component/lib/embedding.js';
+import {DEFAULT_RECALL_TOP_K} from '../component/lib/embedding.js';
 
 export type RunMutationCtx = Pick<
   GenericActionCtx<GenericDataModel>,
   'runQuery' | 'runMutation'
+>;
+
+/**
+ * The ctx shape {@link AgentMemory.recall} needs: the component's recall is
+ * an ACTION (vector search exists only in actions), so the calling app
+ * function must be an action too and supply `runAction`. `write`/`get`/`list`
+ * keep the mutation-capable {@link RunMutationCtx}.
+ */
+export type RunActionCtx = Pick<
+  GenericActionCtx<GenericDataModel>,
+  'runAction'
 >;
 
 // The component functions' exact arg/return types, recovered from the
@@ -23,6 +44,8 @@ type GetArgs = FunctionArgs<ComponentApi['memory']['get']>;
 type GetResult = FunctionReturnType<ComponentApi['memory']['get']>;
 type ListArgs = FunctionArgs<ComponentApi['memory']['list']>;
 type ListResult = FunctionReturnType<ComponentApi['memory']['list']>;
+type RecallArgs = FunctionArgs<ComponentApi['memory']['recall']>;
+type RecallResult = FunctionReturnType<ComponentApi['memory']['recall']>;
 
 /** Arguments to {@link AgentMemory.write}. */
 export type MemoryWriteArgs = WriteArgs;
@@ -30,10 +53,23 @@ export type MemoryWriteArgs = WriteArgs;
 export type MemoryGetArgs = GetArgs;
 /** Arguments to {@link AgentMemory.list}. */
 export type MemoryListArgs = ListArgs;
+/**
+ * Arguments to {@link AgentMemory.recall}. Exactly ONE of `query` (text —
+ * requires a configured embedder) or `embedding` (a ready vector — the
+ * embedder is not consulted) must be supplied. `topK` defaults to
+ * {@link DEFAULT_RECALL_TOP_K}.
+ */
+export type MemoryRecallArgs = Omit<RecallArgs, 'embedding' | 'topK'> & {
+  query?: string;
+  embedding?: number[];
+  topK?: number;
+};
 /** A successful write: the record id, how it resolved, the correlation id. */
 export type MemoryWriteOk = Extract<WriteResult, {ok: true}>;
 /** One successful list page: rows, pagination state, correlation id. */
 export type MemoryListOk = Extract<ListResult, {ok: true}>;
+/** A successful recall: matches ordered by score desc, correlation id. */
+export type MemoryRecallOk = Extract<RecallResult, {ok: true}>;
 /** The list filter shape (plain data, closed object). */
 export type MemoryListFilter = NonNullable<ListArgs['filter']>;
 /** A full memory record, as returned by governed reads. */
@@ -108,7 +144,11 @@ export interface MemoryComponentConfig {
  * component mutation would roll it back); the client restores fail(code,
  * message) semantics for app code here, AFTER that mutation has committed.
  */
-function throwDenied(result: Extract<WriteResult, {ok: false}>): never {
+function throwDenied(result: {
+  code: string;
+  message: string;
+  correlationId: string;
+}): never {
   throw new ConvexError({
     code: result.code,
     message: result.message,
@@ -192,6 +232,87 @@ export class AgentMemory {
    */
   async list(ctx: RunMutationCtx, args: MemoryListArgs): Promise<MemoryListOk> {
     const result = await ctx.runMutation(this.component.memory.list, args);
+    if (!result.ok) {
+      throwDenied(result);
+    }
+    return result;
+  }
+
+  /**
+   * Governed semantic recall: tenant-partitioned vector search, matches
+   * ordered by similarity score descending. MUST be called from an app
+   * ACTION (the component's recall is an action — vector search exists only
+   * there), hence the {@link RunActionCtx} ctx shape.
+   *
+   * Supply exactly one of:
+   * - `query` — text to embed. REQUIRES `config.embedder`; throws typed
+   *   `embedder_not_configured` naming the missing config slot when absent.
+   *   An embedder that throws, or returns anything other than an array of
+   *   exactly `EMBEDDING_DIMENSIONS` finite numbers, becomes a typed
+   *   `embedder_response_malformed` error — the malformed vector never
+   *   reaches the component.
+   * - `embedding` — a ready vector; the embedder is not consulted. The
+   *   component validates it (typed `invalid_embedding` denial, audited).
+   *
+   * Throws a typed ConvexError (`tenant_context_conflict`,
+   * `invalid_embedding`, `invalid_topk`) on a governed denial, after the
+   * denial's audit row has committed.
+   */
+  async recall(
+    ctx: RunActionCtx,
+    args: MemoryRecallArgs
+  ): Promise<MemoryRecallOk> {
+    const {query, embedding: suppliedEmbedding, topK, ...rest} = args;
+    if (query !== undefined && suppliedEmbedding !== undefined) {
+      throw new ConvexError({
+        code: 'invalid_argument',
+        message:
+          'Supply exactly one of `query` or `embedding` to recall, not both.'
+      });
+    }
+    let embedding: number[];
+    if (suppliedEmbedding !== undefined) {
+      embedding = suppliedEmbedding;
+    } else {
+      if (query === undefined || query === '') {
+        throw new ConvexError({
+          code: 'invalid_argument',
+          message:
+            'Recall needs either a non-empty `query` string or an `embedding` vector.'
+        });
+      }
+      const embedder = this.options.embedder;
+      if (embedder === undefined) {
+        throw new ConvexError({
+          code: 'embedder_not_configured',
+          message:
+            'Recall by query text requires `config.embedder` on the AgentMemory client (new AgentMemory(component, {embedder})). Supply an embedder, or pass a ready `embedding` vector instead.'
+        });
+      }
+      let response: unknown;
+      try {
+        response = await embedder(query);
+      } catch (caught) {
+        throw new ConvexError({
+          code: 'embedder_response_malformed',
+          message: `The configured embedder threw while embedding the query: ${
+            caught instanceof Error ? caught.message : String(caught)
+          }`
+        });
+      }
+      if (!isWellFormedEmbedding(response)) {
+        throw new ConvexError({
+          code: 'embedder_response_malformed',
+          message: `The configured embedder returned a malformed embedding: ${embeddingProblem(response) ?? 'unknown problem'}`
+        });
+      }
+      embedding = response;
+    }
+    const result = await ctx.runAction(this.component.memory.recall, {
+      ...rest,
+      embedding,
+      topK: topK ?? DEFAULT_RECALL_TOP_K
+    });
     if (!result.ok) {
       throwDenied(result);
     }

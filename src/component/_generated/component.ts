@@ -42,6 +42,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               content: string;
               createdAt: number;
               createdBy: string;
+              embedding?: Array<number>;
               idempotencyKey: string | null;
               key: string;
               mandateId: string | null;
@@ -64,7 +65,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | 'tenant_context_conflict'
               | 'idempotency_key_reused'
-              | 'invalid_filter';
+              | 'invalid_filter'
+              | 'invalid_embedding'
+              | 'invalid_topk';
             correlationId: string;
             message: string;
             ok: false;
@@ -109,6 +112,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               content: string;
               createdAt: number;
               createdBy: string;
+              embedding?: Array<number>;
               idempotencyKey: string | null;
               key: string;
               mandateId: string | null;
@@ -130,7 +134,63 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | 'tenant_context_conflict'
               | 'idempotency_key_reused'
-              | 'invalid_filter';
+              | 'invalid_filter'
+              | 'invalid_embedding'
+              | 'invalid_topk';
+            correlationId: string;
+            message: string;
+            ok: false;
+          },
+        Name
+      >;
+      recall: FunctionReference<
+        'action',
+        'internal',
+        {
+          claimedOrgCode?: string;
+          correlationId?: string;
+          embedding: Array<number>;
+          orgCode: string;
+          subject: string;
+          topK: number;
+        },
+        | {
+            correlationId: string;
+            matches: Array<{
+              memory: {
+                _creationTime: number;
+                _id: string;
+                content: string;
+                createdAt: number;
+                createdBy: string;
+                embedding?: Array<number>;
+                idempotencyKey: string | null;
+                key: string;
+                mandateId: string | null;
+                metadata?: Record<
+                  string,
+                  | string
+                  | number
+                  | boolean
+                  | null
+                  | Array<string | number | boolean | null>
+                >;
+                orgCode: string;
+                subject: string;
+                writtenAt: number;
+                writtenBy: string;
+              };
+              score: number;
+            }>;
+            ok: true;
+          }
+        | {
+            code:
+              | 'tenant_context_conflict'
+              | 'idempotency_key_reused'
+              | 'invalid_filter'
+              | 'invalid_embedding'
+              | 'invalid_topk';
             correlationId: string;
             message: string;
             ok: false;
@@ -144,6 +204,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           claimedOrgCode?: string;
           content: string;
           correlationId?: string;
+          embedding?: Array<number>;
           idempotencyKey?: string;
           key: string;
           metadata?: Record<
@@ -167,7 +228,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | 'tenant_context_conflict'
               | 'idempotency_key_reused'
-              | 'invalid_filter';
+              | 'invalid_filter'
+              | 'invalid_embedding'
+              | 'invalid_topk';
             correlationId: string;
             message: string;
             ok: false;

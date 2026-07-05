@@ -10,7 +10,9 @@ import {ConvexError} from 'convex/values';
  * inside a component mutation — a throw would roll back the denial's audit
  * row. Denials are returned as a typed `DeniedResult` and converted to a
  * thrown ConvexError by the client class. `fail` is for malformed calls that
- * never reach the governed path (nothing to audit, nothing to roll back).
+ * never reach the governed path (nothing to audit, nothing to roll back) —
+ * and for hard INVARIANT VIOLATIONS (`isolation_invariant_violation`), where
+ * aborting the whole transaction is exactly the point.
  */
 export function fail(code: string, message: string): never {
   throw new ConvexError({code, message});

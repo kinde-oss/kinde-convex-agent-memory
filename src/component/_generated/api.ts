@@ -12,6 +12,7 @@ import type * as access from '../access.js';
 import type * as lib_audit from '../lib/audit.js';
 import type * as lib_correlation from '../lib/correlation.js';
 import type * as lib_digest from '../lib/digest.js';
+import type * as lib_embedding from '../lib/embedding.js';
 import type * as lib_errors from '../lib/errors.js';
 import type * as memory from '../memory.js';
 import type * as validators from '../validators.js';
@@ -24,6 +25,7 @@ const fullApi: ApiFromModules<{
   'lib/audit': typeof lib_audit;
   'lib/correlation': typeof lib_correlation;
   'lib/digest': typeof lib_digest;
+  'lib/embedding': typeof lib_embedding;
   'lib/errors': typeof lib_errors;
   memory: typeof memory;
   validators: typeof validators;

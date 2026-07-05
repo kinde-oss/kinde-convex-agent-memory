@@ -1,13 +1,41 @@
-import {mutation, query} from './_generated/server.js';
+import {action, mutation, query} from './_generated/server.js';
 import {components} from './_generated/api.js';
-import {AgentMemory} from '@kinde-oss/kinde-convex-agent-memory';
+import {
+  AgentMemory,
+  EMBEDDING_DIMENSIONS
+} from '@kinde-oss/kinde-convex-agent-memory';
 import {v} from 'convex/values';
 
 /**
- * The component client. Construct it once with the component reference from
- * the app's generated `components` object, then call its methods.
+ * A FAKE, fully deterministic embedder for the example: hashes the text into
+ * a fixed-dimension vector (identical text → identical vector; different
+ * text → an unrelated vector). It demonstrates the injectable embedder seam
+ * without any provider dependency — a real app supplies its embedding model
+ * here instead. Exported so the example's tests reuse the same vectors.
  */
-export const agentMemory = new AgentMemory(components.memory);
+export function fakeEmbed(text: string): number[] {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  const vector: number[] = [];
+  for (let i = 0; i < EMBEDDING_DIMENSIONS; i++) {
+    h ^= i;
+    h = Math.imul(h, 0x01000193);
+    vector.push(((h >>> 0) % 2001) / 1000 - 1);
+  }
+  return vector;
+}
+
+/**
+ * The component client. Construct it once with the component reference from
+ * the app's generated `components` object, then call its methods. The
+ * embedder config slot enables recall by query text.
+ */
+export const agentMemory = new AgentMemory(components.memory, {
+  embedder: async (text) => fakeEmbed(text)
+});
 
 /** Trivial health check proving the example app and mounted component load. */
 export const health = query({
@@ -80,6 +108,77 @@ export const listMemories = mutation({
       isDone: result.isDone,
       continueCursor: result.continueCursor
     };
+  }
+});
+
+/**
+ * Governed write WITH an embedding: the content is embedded with the same
+ * fake embedder recall uses, so `recallMemories` below can find it. The
+ * vector is supplied to the component alongside the write — the component
+ * itself never embeds.
+ */
+export const writeMemoryEmbedded = mutation({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    key: v.string(),
+    content: v.string()
+  },
+  returns: v.object({
+    memoryId: v.string(),
+    outcome: v.string(),
+    correlationId: v.string()
+  }),
+  handler: async (ctx, args) => {
+    const result = await agentMemory.write(ctx, {
+      ...args,
+      embedding: fakeEmbed(args.content)
+    });
+    return {
+      memoryId: result.memoryId,
+      outcome: result.outcome,
+      correlationId: result.correlationId
+    };
+  }
+});
+
+/**
+ * The recall driver: semantic recall by QUERY TEXT, demonstrating the
+ * injected-embedder path end to end. An ACTION, because the component's
+ * recall is one (vector search exists only in actions).
+ */
+export const recallMemories = action({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    claimedOrgCode: v.optional(v.string()),
+    query: v.string(),
+    topK: v.optional(v.number())
+  },
+  returns: v.array(
+    v.object({
+      key: v.string(),
+      content: v.string(),
+      orgCode: v.string(),
+      score: v.number()
+    })
+  ),
+  handler: async (ctx, args) => {
+    const result = await agentMemory.recall(ctx, {
+      subject: args.subject,
+      orgCode: args.orgCode,
+      ...(args.claimedOrgCode === undefined
+        ? {}
+        : {claimedOrgCode: args.claimedOrgCode}),
+      query: args.query,
+      ...(args.topK === undefined ? {} : {topK: args.topK})
+    });
+    return result.matches.map((match) => ({
+      key: match.memory.key,
+      content: match.memory.content,
+      orgCode: match.memory.orgCode,
+      score: match.score
+    }));
   }
 });
 
