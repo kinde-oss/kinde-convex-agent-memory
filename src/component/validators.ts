@@ -26,9 +26,28 @@ export const operationValidator = v.union(
   v.literal('write'),
   v.literal('get'),
   v.literal('list'),
-  v.literal('recall')
+  v.literal('recall'),
+  v.literal('grant'),
+  v.literal('revoke_grant'),
+  v.literal('set_redaction')
 );
 export type MemoryOperation = Infer<typeof operationValidator>;
+
+/**
+ * The CLOSED set of grantable scopes, mapped one-to-one onto the governed
+ * memory operations they gate: `memory.write` → write, `memory.read` → get
+ * and list (both are reads), `memory.recall` → recall. The management
+ * operations themselves (grant / revoke_grant / set_redaction) are
+ * tenant-gated but NOT scope-gated in this phase — the trusted host app is
+ * the trust boundary for administration; an admin scope is a later-phase
+ * decision, made deliberately, not by accident here.
+ */
+export const grantScopeValidator = v.union(
+  v.literal('memory.read'),
+  v.literal('memory.write'),
+  v.literal('memory.recall')
+);
+export type GrantScope = Infer<typeof grantScopeValidator>;
 
 export const auditDecisionValidator = v.union(
   v.literal('ok'),
@@ -50,7 +69,11 @@ export const deniedCodeValidator = v.union(
   v.literal('idempotency_key_reused'),
   v.literal('invalid_filter'),
   v.literal('invalid_embedding'),
-  v.literal('invalid_topk')
+  v.literal('invalid_topk'),
+  v.literal('scope_not_granted'),
+  v.literal('grant_not_found'),
+  v.literal('policy_not_found'),
+  v.literal('invalid_redaction_fields')
 );
 export type DeniedCode = Infer<typeof deniedCodeValidator>;
 
@@ -79,11 +102,20 @@ export const auditReasonValidator = v.union(
   v.literal('not_found'),
   v.literal('listed'),
   v.literal('recalled'),
+  v.literal('granted'),
+  v.literal('already_granted'),
+  v.literal('revoked'),
+  v.literal('redaction_set'),
+  v.literal('redaction_cleared'),
   v.literal('tenant_context_conflict'),
   v.literal('idempotency_key_reused'),
   v.literal('invalid_filter'),
   v.literal('invalid_embedding'),
-  v.literal('invalid_topk')
+  v.literal('invalid_topk'),
+  v.literal('scope_not_granted'),
+  v.literal('grant_not_found'),
+  v.literal('policy_not_found'),
+  v.literal('invalid_redaction_fields')
 );
 export type AuditReason = Infer<typeof auditReasonValidator>;
 
@@ -183,6 +215,51 @@ export const recallResultValidator = v.union(
   deniedResultValidator
 );
 export type RecallResult = Infer<typeof recallResultValidator>;
+
+/** How a successful grant resolved. Doubles as the grant's audit reason. */
+export const grantOutcomeValidator = v.union(
+  v.literal('granted'),
+  v.literal('already_granted')
+);
+export type GrantOutcome = Infer<typeof grantOutcomeValidator>;
+
+export const grantResultValidator = v.union(
+  v.object({
+    ok: v.literal(true),
+    grantId: v.id('accessGrants'),
+    outcome: grantOutcomeValidator,
+    correlationId: v.string()
+  }),
+  deniedResultValidator
+);
+export type GrantResult = Infer<typeof grantResultValidator>;
+
+export const revokeGrantResultValidator = v.union(
+  v.object({
+    ok: v.literal(true),
+    grantId: v.id('accessGrants'),
+    correlationId: v.string()
+  }),
+  deniedResultValidator
+);
+export type RevokeGrantResult = Infer<typeof revokeGrantResultValidator>;
+
+/** How a successful setRedaction resolved (empty `fields` clears the policy). */
+export const setRedactionOutcomeValidator = v.union(
+  v.literal('set'),
+  v.literal('cleared')
+);
+export type SetRedactionOutcome = Infer<typeof setRedactionOutcomeValidator>;
+
+export const setRedactionResultValidator = v.union(
+  v.object({
+    ok: v.literal(true),
+    outcome: setRedactionOutcomeValidator,
+    correlationId: v.string()
+  }),
+  deniedResultValidator
+);
+export type SetRedactionResult = Infer<typeof setRedactionResultValidator>;
 
 export const listResultValidator = v.union(
   v.object({

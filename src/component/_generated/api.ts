@@ -9,12 +9,16 @@
  */
 
 import type * as access from '../access.js';
+import type * as grants from '../grants.js';
 import type * as lib_audit from '../lib/audit.js';
 import type * as lib_correlation from '../lib/correlation.js';
 import type * as lib_digest from '../lib/digest.js';
 import type * as lib_embedding from '../lib/embedding.js';
 import type * as lib_errors from '../lib/errors.js';
+import type * as lib_grantStore from '../lib/grantStore.js';
+import type * as lib_redaction from '../lib/redaction.js';
 import type * as memory from '../memory.js';
+import type * as policy from '../policy.js';
 import type * as validators from '../validators.js';
 
 import type {ApiFromModules, FilterApi, FunctionReference} from 'convex/server';
@@ -22,12 +26,16 @@ import {anyApi, componentsGeneric} from 'convex/server';
 
 const fullApi: ApiFromModules<{
   access: typeof access;
+  grants: typeof grants;
   'lib/audit': typeof lib_audit;
   'lib/correlation': typeof lib_correlation;
   'lib/digest': typeof lib_digest;
   'lib/embedding': typeof lib_embedding;
   'lib/errors': typeof lib_errors;
+  'lib/grantStore': typeof lib_grantStore;
+  'lib/redaction': typeof lib_redaction;
   memory: typeof memory;
+  policy: typeof policy;
   validators: typeof validators;
 }> = anyApi as any;
 

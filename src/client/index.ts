@@ -17,6 +17,10 @@ export {
   EMBEDDING_DIMENSIONS,
   MAX_RECALL_TOP_K
 } from '../component/lib/embedding.js';
+export {
+  CONTENT_REDACTED,
+  REDACT_CONTENT_FIELD
+} from '../component/lib/redaction.js';
 import {DEFAULT_RECALL_TOP_K} from '../component/lib/embedding.js';
 
 export type RunMutationCtx = Pick<
@@ -46,6 +50,16 @@ type ListArgs = FunctionArgs<ComponentApi['memory']['list']>;
 type ListResult = FunctionReturnType<ComponentApi['memory']['list']>;
 type RecallArgs = FunctionArgs<ComponentApi['memory']['recall']>;
 type RecallResult = FunctionReturnType<ComponentApi['memory']['recall']>;
+type GrantArgs = FunctionArgs<ComponentApi['grants']['grant']>;
+type GrantResult = FunctionReturnType<ComponentApi['grants']['grant']>;
+type RevokeGrantArgs = FunctionArgs<ComponentApi['grants']['revokeGrant']>;
+type RevokeGrantResult = FunctionReturnType<
+  ComponentApi['grants']['revokeGrant']
+>;
+type SetRedactionArgs = FunctionArgs<ComponentApi['policy']['setRedaction']>;
+type SetRedactionResult = FunctionReturnType<
+  ComponentApi['policy']['setRedaction']
+>;
 
 /** Arguments to {@link AgentMemory.write}. */
 export type MemoryWriteArgs = WriteArgs;
@@ -72,6 +86,20 @@ export type MemoryListOk = Extract<ListResult, {ok: true}>;
 export type MemoryRecallOk = Extract<RecallResult, {ok: true}>;
 /** The list filter shape (plain data, closed object). */
 export type MemoryListFilter = NonNullable<ListArgs['filter']>;
+/** Arguments to {@link AgentMemory.grant}. */
+export type MemoryGrantArgs = GrantArgs;
+/** A successful grant: the grant id, how it resolved, the correlation id. */
+export type MemoryGrantOk = Extract<GrantResult, {ok: true}>;
+/** Arguments to {@link AgentMemory.revokeGrant}. */
+export type MemoryRevokeGrantArgs = RevokeGrantArgs;
+/** A successful revocation: the revoked grant's id and the correlation id. */
+export type MemoryRevokeGrantOk = Extract<RevokeGrantResult, {ok: true}>;
+/** Arguments to {@link AgentMemory.setRedaction}. */
+export type MemorySetRedactionArgs = SetRedactionArgs;
+/** A successful setRedaction: `set` or `cleared`, and the correlation id. */
+export type MemorySetRedactionOk = Extract<SetRedactionResult, {ok: true}>;
+/** The closed set of grantable scopes. */
+export type MemoryGrantScope = GrantArgs['scope'];
 /** A full memory record, as returned by governed reads. */
 export type MemoryRecord = NonNullable<
   Extract<GetResult, {ok: true}>['memory']
@@ -313,6 +341,71 @@ export class AgentMemory {
       embedding,
       topK: topK ?? DEFAULT_RECALL_TOP_K
     });
+    if (!result.ok) {
+      throwDenied(result);
+    }
+    return result;
+  }
+
+  /**
+   * Grant a scope to `targetSubject` in the tenant. The target's FIRST grant
+   * flips it from permissive (the no-grants default, where the component
+   * behaves as if grants did not exist) to enforced mode — from then on it
+   * holds exactly the scopes granted. Idempotent for an already-active
+   * scope (`outcome: 'already_granted'`). Throws a typed ConvexError
+   * (`tenant_context_conflict`) on a governed denial, after the denial's
+   * audit row has committed.
+   */
+  async grant(
+    ctx: RunMutationCtx,
+    args: MemoryGrantArgs
+  ): Promise<MemoryGrantOk> {
+    const result = await ctx.runMutation(this.component.grants.grant, args);
+    if (!result.ok) {
+      throwDenied(result);
+    }
+    return result;
+  }
+
+  /**
+   * Revoke `targetSubject`'s active grant of a scope. The subject STAYS in
+   * enforced mode (revoked rows keep the switch on — revoking the last grant
+   * locks the subject out, never restores permissive mode). Throws a typed
+   * ConvexError (`grant_not_found`, `tenant_context_conflict`) on a governed
+   * denial — revoking a nonexistent grant is a denial, not a no-op.
+   */
+  async revokeGrant(
+    ctx: RunMutationCtx,
+    args: MemoryRevokeGrantArgs
+  ): Promise<MemoryRevokeGrantOk> {
+    const result = await ctx.runMutation(
+      this.component.grants.revokeGrant,
+      args
+    );
+    if (!result.ok) {
+      throwDenied(result);
+    }
+    return result;
+  }
+
+  /**
+   * Create or replace the tenant's redaction policy (org-wide, or targeted
+   * at one subject via `targetSubject`; a targeted policy wins outright over
+   * the org-wide one on read). `fields` holds metadata field names and/or
+   * the literal 'content' (see `REDACT_CONTENT_FIELD`); redacted metadata is
+   * omitted on read and redacted content egresses as `CONTENT_REDACTED`.
+   * An empty `fields` array CLEARS the target's policy. Throws a typed
+   * ConvexError (`invalid_redaction_fields`, `policy_not_found`,
+   * `tenant_context_conflict`) on a governed denial.
+   */
+  async setRedaction(
+    ctx: RunMutationCtx,
+    args: MemorySetRedactionArgs
+  ): Promise<MemorySetRedactionOk> {
+    const result = await ctx.runMutation(
+      this.component.policy.setRedaction,
+      args
+    );
     if (!result.ok) {
       throwDenied(result);
     }

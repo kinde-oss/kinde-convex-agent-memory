@@ -17,3 +17,10 @@ import {ConvexError} from 'convex/values';
 export function fail(code: string, message: string): never {
   throw new ConvexError({code, message});
 }
+
+/** Reject blank identity fields — malformed calls never reach the spine. */
+export function requireNonEmpty(value: string, name: string): void {
+  if (value === '') {
+    fail('invalid_argument', `${name} must be a non-empty string.`);
+  }
+}

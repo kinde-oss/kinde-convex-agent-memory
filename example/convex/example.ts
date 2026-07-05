@@ -182,6 +182,65 @@ export const recallMemories = action({
   }
 });
 
+/**
+ * Grant a memory scope to a subject through the client. The target's first
+ * grant flips it from permissive to enforced mode.
+ */
+export const grantAccess = mutation({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    targetSubject: v.string(),
+    scope: v.union(
+      v.literal('memory.read'),
+      v.literal('memory.write'),
+      v.literal('memory.recall')
+    )
+  },
+  returns: v.object({outcome: v.string(), correlationId: v.string()}),
+  handler: async (ctx, args) => {
+    const result = await agentMemory.grant(ctx, args);
+    return {outcome: result.outcome, correlationId: result.correlationId};
+  }
+});
+
+/** Revoke a subject's scope grant through the client. */
+export const revokeAccess = mutation({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    targetSubject: v.string(),
+    scope: v.union(
+      v.literal('memory.read'),
+      v.literal('memory.write'),
+      v.literal('memory.recall')
+    )
+  },
+  returns: v.object({correlationId: v.string()}),
+  handler: async (ctx, args) => {
+    const result = await agentMemory.revokeGrant(ctx, args);
+    return {correlationId: result.correlationId};
+  }
+});
+
+/**
+ * Set (or clear, with an empty fields array) the tenant's redaction policy
+ * through the client — org-wide, or targeted when targetSubject is given.
+ */
+export const setRedactionPolicy = mutation({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    targetSubject: v.optional(v.string()),
+    fields: v.array(v.string())
+  },
+  returns: v.object({outcome: v.string(), correlationId: v.string()}),
+  handler: async (ctx, args) => {
+    const result = await agentMemory.setRedaction(ctx, args);
+    return {outcome: result.outcome, correlationId: result.correlationId};
+  }
+});
+
 /** Governed read-by-key through the client (null when absent IN THIS TENANT). */
 export const getMemory = mutation({
   args: {

@@ -24,6 +24,15 @@
  * client; when present and different from `orgCode` the call is denied
  * `tenant_context_conflict` BEFORE any memory access, and the denial is
  * audited. Neither value is ever silently preferred.
+ *
+ * P4 adds two gates around every operation here:
+ * - SCOPES: after the tenant check, before any memories access, each
+ *   operation checks its grant scope (write → memory.write, get/list →
+ *   memory.read, recall → memory.recall). Subjects with no grant rows are
+ *   PERMISSIVE (P1–P3 behavior, unchanged); see `lib/grantStore.ts`.
+ * - EGRESS: every returned record passes through THE one redaction function
+ *   (`lib/redaction.ts`), enforced at compile time by the Egressed* return
+ *   annotations and pinned by `structure.test.ts`.
  */
 import {action, internalMutation, mutation} from './_generated/server.js';
 import {internal} from './_generated/api.js';
@@ -39,11 +48,17 @@ import {
   searchMemoriesByEmbedding,
   updateMemoryContent
 } from './access.js';
-import {recordAudit} from './lib/audit.js';
+import {deny, recordAudit} from './lib/audit.js';
 import {resolveCorrelationId} from './lib/correlation.js';
 import {describeRecall, digestFilter, digestKey} from './lib/digest.js';
 import {embeddingProblem, topKProblem} from './lib/embedding.js';
-import {fail} from './lib/errors.js';
+import {fail, requireNonEmpty} from './lib/errors.js';
+import {isOperationPermitted} from './lib/grantStore.js';
+import {
+  egressMemories,
+  egressMemory,
+  resolveRedaction
+} from './lib/redaction.js';
 import {
   getResultValidator,
   listFilterValidator,
@@ -55,46 +70,46 @@ import {
   writeResultValidator
 } from './validators.js';
 import type {
-  DeniedCode,
   DeniedResult,
+  GrantScope,
   MemoryOperation,
   RecallDeniedCode,
-  RecallMatch,
   RecallResult
 } from './validators.js';
 import type {ActionCtx, MutationCtx} from './_generated/server.js';
-
-/** Reject blank identity fields — malformed calls never reach the spine. */
-function requireNonEmpty(value: string, name: string): void {
-  if (value === '') {
-    fail('invalid_argument', `${name} must be a non-empty string.`);
-  }
-}
+import type {
+  EgressedGetResult,
+  EgressedListResult,
+  EgressedRecallMatches
+} from './lib/redaction.js';
 
 /**
- * Audit and return one governed denial. The audit row commits because this is
- * a return path, not a throw path (see the module doc).
+ * The P4 scope gate, run by every governed memory operation AFTER the
+ * tenant-conflict check and BEFORE any memories access. Returns the denial
+ * to hand back (audited, one row), or null when the operation may proceed —
+ * either because the subject is PERMISSIVE (no grant rows: the P1–P3
+ * standalone behavior, unchanged) or holds an unrevoked grant of the scope.
  */
-async function deny(
+async function scopeDenial(
   db: MutationCtx['db'],
   operation: MemoryOperation,
   args: {orgCode: string; subject: string},
-  code: DeniedCode,
-  message: string,
+  scope: GrantScope,
   keyOrQueryDigest: string,
   correlationId: string
-): Promise<DeniedResult> {
-  await recordAudit(db, {
-    orgCode: args.orgCode,
-    subject: args.subject,
+): Promise<DeniedResult | null> {
+  if (await isOperationPermitted(db, args.orgCode, args.subject, scope)) {
+    return null;
+  }
+  return await deny(
+    db,
     operation,
-    decision: 'denied',
-    reasonCode: code,
+    args,
+    'scope_not_granted',
+    `The subject has no active grant of the '${scope}' scope in this tenant.`,
     keyOrQueryDigest,
-    correlationId,
-    mandateId: null
-  });
-  return {ok: false, code, message, correlationId};
+    correlationId
+  );
 }
 
 /**
@@ -158,7 +173,21 @@ export const write = mutation({
       );
     }
 
-    // Embedding validation: BEFORE any db access (idempotency lookup included).
+    // Scope gate (P4): after the tenant check, before any memories access.
+    const writeScopeDenied = await scopeDenial(
+      ctx.db,
+      'write',
+      args,
+      'memory.write',
+      keyDigest,
+      correlationId
+    );
+    if (writeScopeDenied !== null) {
+      return writeScopeDenied;
+    }
+
+    // Embedding validation: BEFORE any memories access (idempotency lookup
+    // included).
     if (args.embedding !== undefined) {
       const embeddingIssue = embeddingProblem(args.embedding);
       if (embeddingIssue !== null) {
@@ -284,7 +313,7 @@ export const get = mutation({
     correlationId: v.optional(v.string())
   },
   returns: getResultValidator,
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<EgressedGetResult> => {
     requireNonEmpty(args.orgCode, 'orgCode');
     requireNonEmpty(args.subject, 'subject');
     requireNonEmpty(args.key, 'key');
@@ -306,7 +335,25 @@ export const get = mutation({
       );
     }
 
+    // Scope gate (P4): after the tenant check, before any memories access.
+    const scopeDenied = await scopeDenial(
+      ctx.db,
+      'get',
+      args,
+      'memory.read',
+      keyDigest,
+      correlationId
+    );
+    if (scopeDenied !== null) {
+      return scopeDenied;
+    }
+
     const memory = await getMemoryByKey(ctx.db, args.orgCode, args.key);
+    const redaction = await resolveRedaction(
+      ctx.db,
+      args.orgCode,
+      args.subject
+    );
     await recordAudit(ctx.db, {
       orgCode: args.orgCode,
       subject: args.subject,
@@ -317,7 +364,11 @@ export const get = mutation({
       correlationId,
       mandateId: null
     });
-    return {ok: true as const, memory, correlationId};
+    return {
+      ok: true as const,
+      memory: memory === null ? null : egressMemory(memory, redaction),
+      correlationId
+    };
   }
 });
 
@@ -342,7 +393,7 @@ export const list = mutation({
     correlationId: v.optional(v.string())
   },
   returns: listResultValidator,
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<EgressedListResult> => {
     requireNonEmpty(args.orgCode, 'orgCode');
     requireNonEmpty(args.subject, 'subject');
     if (args.paginationOpts.numItems <= 0) {
@@ -366,6 +417,19 @@ export const list = mutation({
       );
     }
 
+    // Scope gate (P4): after the tenant check, before any memories access.
+    const scopeDenied = await scopeDenial(
+      ctx.db,
+      'list',
+      args,
+      'memory.read',
+      filterDigest,
+      correlationId
+    );
+    if (scopeDenied !== null) {
+      return scopeDenied;
+    }
+
     const contradiction = filterContradiction(args.filter);
     if (contradiction !== null) {
       return await deny(
@@ -386,8 +450,13 @@ export const list = mutation({
       args.paginationOpts
     );
 
-    // P4 REDACTION SEAM: policy-based redaction-on-read will apply to `page`
-    // HERE — inside the governed path, before rows leave it. Not pre-built.
+    // The P4 redaction seam, now live: every row egresses through the ONE
+    // redaction function inside the governed path, before rows leave it.
+    const redaction = await resolveRedaction(
+      ctx.db,
+      args.orgCode,
+      args.subject
+    );
 
     await recordAudit(ctx.db, {
       orgCode: args.orgCode,
@@ -399,7 +468,13 @@ export const list = mutation({
       correlationId,
       mandateId: null
     });
-    return {ok: true as const, page, isDone, continueCursor, correlationId};
+    return {
+      ok: true as const,
+      page: egressMemories(page, redaction),
+      isDone,
+      continueCursor,
+      correlationId
+    };
   }
 });
 
@@ -427,6 +502,44 @@ async function denyRecall(
   });
   return {ok: false, code, message, correlationId};
 }
+
+/**
+ * The recall action's scope gate (P4). Actions cannot touch the db, so the
+ * grant lookup runs in this internal mutation; when the scope is missing it
+ * ALSO commits the denial's one audit row in the same transaction, so a
+ * scope-denied recall audits exactly once (this is then the only mutation
+ * that recall runs).
+ */
+export const ensureRecallScope = internalMutation({
+  args: {
+    orgCode: v.string(),
+    subject: v.string(),
+    keyOrQueryDigest: v.string(),
+    correlationId: v.string()
+  },
+  returns: v.object({permitted: v.boolean()}),
+  handler: async (ctx, args) => {
+    const permitted = await isOperationPermitted(
+      ctx.db,
+      args.orgCode,
+      args.subject,
+      'memory.recall'
+    );
+    if (!permitted) {
+      await recordAudit(ctx.db, {
+        orgCode: args.orgCode,
+        subject: args.subject,
+        operation: 'recall',
+        decision: 'denied',
+        reasonCode: 'scope_not_granted',
+        keyOrQueryDigest: args.keyOrQueryDigest,
+        correlationId: args.correlationId,
+        mandateId: null
+      });
+    }
+    return {permitted};
+  }
+});
 
 /** Commits the ONE audit row of a denied recall (see {@link denyRecall}). */
 export const recordRecallDenial = internalMutation({
@@ -473,17 +586,24 @@ export const finalizeRecall = internalMutation({
     correlationId: v.string()
   },
   returns: v.array(recallMatchValidator),
-  handler: async (ctx, args): Promise<RecallMatch[]> => {
+  handler: async (ctx, args): Promise<EgressedRecallMatches> => {
     const docs = await getMemoriesByIds(
       ctx.db,
       args.orgCode,
       args.hits.map((hit) => hit.id)
     );
-    const matches: RecallMatch[] = [];
+    // Redaction-on-read applies to recall matches exactly as to get/list:
+    // every returned record egresses through the ONE redaction function.
+    const redaction = await resolveRedaction(
+      ctx.db,
+      args.orgCode,
+      args.subject
+    );
+    const matches: EgressedRecallMatches = [];
     for (const hit of args.hits) {
       const doc = docs.get(hit.id);
       if (doc !== undefined) {
-        matches.push({memory: doc, score: hit.score});
+        matches.push({memory: egressMemory(doc, redaction), score: hit.score});
       }
     }
     await recordAudit(ctx.db, {
@@ -548,6 +668,27 @@ export const recall = action({
         'The claimed org code does not match the server-verified tenant context.',
         correlationId
       );
+    }
+
+    // Scope gate (P4): after the tenant check, before any search. The
+    // internal mutation audits the denial itself (one row, committed there).
+    const scopeCheck = await ctx.runMutation(
+      internal.memory.ensureRecallScope,
+      {
+        orgCode: args.orgCode,
+        subject: args.subject,
+        keyOrQueryDigest: describeRecall(args.topK),
+        correlationId
+      }
+    );
+    if (!scopeCheck.permitted) {
+      return {
+        ok: false as const,
+        code: 'scope_not_granted' as const,
+        message:
+          "The subject has no active grant of the 'memory.recall' scope in this tenant.",
+        correlationId
+      };
     }
 
     // Embedding and bound validation: BEFORE any search.

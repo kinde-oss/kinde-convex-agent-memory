@@ -64,6 +64,29 @@ export function digestFilter(filter: unknown): string {
  * carries content, so no hashing is needed. Denials audit before any search
  * runs, so their descriptor has no result count.
  */
+/**
+ * Audit descriptor for a GRANT / REVOKE. The scope is a closed enum (never
+ * content-bearing) and rides in plain text; the target subject is an
+ * identity string and is fingerprinted like keys are — only its hash
+ * survives, but the same target always correlates.
+ */
+export function digestGrant(scope: string, targetSubject: string): string {
+  return `v1:grant:${scope}:${hash8(targetSubject)}`;
+}
+
+/**
+ * Audit descriptor for a SET-REDACTION. The whole targeting + fields shape
+ * is fingerprinted as one object — metadata FIELD NAMES are app schema and
+ * potentially sensitive, so raw names never reach an audit row, while the
+ * same policy shape always correlates.
+ */
+export function digestRedaction(
+  targetSubject: string | null,
+  fields: string[]
+): string {
+  return `v1:redaction:${hash8(stableStringify({targetSubject, fields}))}`;
+}
+
 export function describeRecall(topK: number, resultCount?: number): string {
   return resultCount === undefined
     ? `v1:recall:topK=${topK}`

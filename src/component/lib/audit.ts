@@ -2,6 +2,8 @@ import type {MutationCtx} from '../_generated/server.js';
 import type {
   AuditDecision,
   AuditReason,
+  DeniedCode,
+  DeniedResult,
   MemoryOperation
 } from '../validators.js';
 
@@ -33,4 +35,31 @@ export async function recordAudit(
   event: AuditEvent
 ): Promise<void> {
   await db.insert('audit', {...event, ts: Date.now()});
+}
+
+/**
+ * Audit and return one governed denial — shared by every governed mutation
+ * (memory, grants, policy). The audit row commits because this is a RETURN
+ * path, not a throw path (see the module doc on `memory.ts`).
+ */
+export async function deny(
+  db: MutationCtx['db'],
+  operation: MemoryOperation,
+  args: {orgCode: string; subject: string},
+  code: DeniedCode,
+  message: string,
+  keyOrQueryDigest: string,
+  correlationId: string
+): Promise<DeniedResult> {
+  await recordAudit(db, {
+    orgCode: args.orgCode,
+    subject: args.subject,
+    operation,
+    decision: 'denied',
+    reasonCode: code,
+    keyOrQueryDigest,
+    correlationId,
+    mandateId: null
+  });
+  return {ok: false, code, message, correlationId};
 }

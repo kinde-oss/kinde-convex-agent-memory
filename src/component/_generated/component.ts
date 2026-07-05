@@ -23,6 +23,71 @@ import type {FunctionReference} from 'convex/server';
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
+    grants: {
+      grant: FunctionReference<
+        'mutation',
+        'internal',
+        {
+          claimedOrgCode?: string;
+          correlationId?: string;
+          orgCode: string;
+          scope: 'memory.read' | 'memory.write' | 'memory.recall';
+          subject: string;
+          targetSubject: string;
+        },
+        | {
+            correlationId: string;
+            grantId: string;
+            ok: true;
+            outcome: 'granted' | 'already_granted';
+          }
+        | {
+            code:
+              | 'tenant_context_conflict'
+              | 'idempotency_key_reused'
+              | 'invalid_filter'
+              | 'invalid_embedding'
+              | 'invalid_topk'
+              | 'scope_not_granted'
+              | 'grant_not_found'
+              | 'policy_not_found'
+              | 'invalid_redaction_fields';
+            correlationId: string;
+            message: string;
+            ok: false;
+          },
+        Name
+      >;
+      revokeGrant: FunctionReference<
+        'mutation',
+        'internal',
+        {
+          claimedOrgCode?: string;
+          correlationId?: string;
+          orgCode: string;
+          scope: 'memory.read' | 'memory.write' | 'memory.recall';
+          subject: string;
+          targetSubject: string;
+        },
+        | {correlationId: string; grantId: string; ok: true}
+        | {
+            code:
+              | 'tenant_context_conflict'
+              | 'idempotency_key_reused'
+              | 'invalid_filter'
+              | 'invalid_embedding'
+              | 'invalid_topk'
+              | 'scope_not_granted'
+              | 'grant_not_found'
+              | 'policy_not_found'
+              | 'invalid_redaction_fields';
+            correlationId: string;
+            message: string;
+            ok: false;
+          },
+        Name
+      >;
+    };
     memory: {
       get: FunctionReference<
         'mutation',
@@ -67,7 +132,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               | 'idempotency_key_reused'
               | 'invalid_filter'
               | 'invalid_embedding'
-              | 'invalid_topk';
+              | 'invalid_topk'
+              | 'scope_not_granted'
+              | 'grant_not_found'
+              | 'policy_not_found'
+              | 'invalid_redaction_fields';
             correlationId: string;
             message: string;
             ok: false;
@@ -136,7 +205,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               | 'idempotency_key_reused'
               | 'invalid_filter'
               | 'invalid_embedding'
-              | 'invalid_topk';
+              | 'invalid_topk'
+              | 'scope_not_granted'
+              | 'grant_not_found'
+              | 'policy_not_found'
+              | 'invalid_redaction_fields';
             correlationId: string;
             message: string;
             ok: false;
@@ -190,7 +263,11 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               | 'idempotency_key_reused'
               | 'invalid_filter'
               | 'invalid_embedding'
-              | 'invalid_topk';
+              | 'invalid_topk'
+              | 'scope_not_granted'
+              | 'grant_not_found'
+              | 'policy_not_found'
+              | 'invalid_redaction_fields';
             correlationId: string;
             message: string;
             ok: false;
@@ -230,7 +307,42 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               | 'idempotency_key_reused'
               | 'invalid_filter'
               | 'invalid_embedding'
-              | 'invalid_topk';
+              | 'invalid_topk'
+              | 'scope_not_granted'
+              | 'grant_not_found'
+              | 'policy_not_found'
+              | 'invalid_redaction_fields';
+            correlationId: string;
+            message: string;
+            ok: false;
+          },
+        Name
+      >;
+    };
+    policy: {
+      setRedaction: FunctionReference<
+        'mutation',
+        'internal',
+        {
+          claimedOrgCode?: string;
+          correlationId?: string;
+          fields: Array<string>;
+          orgCode: string;
+          subject: string;
+          targetSubject?: string;
+        },
+        | {correlationId: string; ok: true; outcome: 'set' | 'cleared'}
+        | {
+            code:
+              | 'tenant_context_conflict'
+              | 'idempotency_key_reused'
+              | 'invalid_filter'
+              | 'invalid_embedding'
+              | 'invalid_topk'
+              | 'scope_not_granted'
+              | 'grant_not_found'
+              | 'policy_not_found'
+              | 'invalid_redaction_fields';
             correlationId: string;
             message: string;
             ok: false;
