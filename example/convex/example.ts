@@ -4,7 +4,11 @@ import {
   AgentMemory,
   EMBEDDING_DIMENSIONS
 } from '@kinde-oss/kinde-convex-agent-memory';
-import type {MemoryId} from '@kinde-oss/kinde-convex-agent-memory';
+import type {
+  MemoryId,
+  VerifiedCaller,
+  VerifyCaller
+} from '@kinde-oss/kinde-convex-agent-memory';
 import {v} from 'convex/values';
 
 /**
@@ -30,12 +34,59 @@ export function fakeEmbed(text: string): number[] {
 }
 
 /**
+ * A FAKE, deterministic `verifyCaller` for the example: maps a fixed set of
+ * test bearer tokens to server-verified callers. A REAL app supplies its own
+ * (e.g. `@kinde-oss/kinde-convex-agent-auth`'s `verifyCaller`, which validates a
+ * JWT and returns the token's tenant). The `orgCode` here IS the authoritative
+ * tenant the HTTP seam binds to — it comes from the (fake) token, never a body.
+ *
+ * - `token-alice-orgA` → org_alpha
+ * - `token-bob-orgB`   → org_beta   (the isolation story is mountable)
+ * - `token-no-org`     → a VALID shape with `orgCode: null` (no tenant), used to
+ *   exercise the `verify_caller_response_malformed` path
+ * - anything else      → throws (a rejected/unknown token → 401)
+ */
+const FAKE_TOKENS: Record<string, VerifiedCaller> = {
+  'token-alice-orgA': {
+    subject: 'user_alice',
+    agentId: 'agent_alice',
+    orgCode: 'org_alpha',
+    scopes: ['memory.read', 'memory.write', 'memory.recall'],
+    claims: {iss: 'fake', sub: 'user_alice'}
+  },
+  'token-bob-orgB': {
+    subject: 'user_bob',
+    agentId: 'agent_bob',
+    orgCode: 'org_beta',
+    scopes: ['memory.read', 'memory.write', 'memory.recall'],
+    claims: {iss: 'fake', sub: 'user_bob'}
+  },
+  'token-no-org': {
+    subject: 'user_ghost',
+    agentId: null,
+    orgCode: null,
+    scopes: [],
+    claims: {iss: 'fake', sub: 'user_ghost'}
+  }
+};
+
+export const fakeVerifyCaller: VerifyCaller = async (token) => {
+  const caller = FAKE_TOKENS[token];
+  if (caller === undefined) {
+    throw new Error('unknown token');
+  }
+  return caller;
+};
+
+/**
  * The component client. Construct it once with the component reference from
  * the app's generated `components` object, then call its methods. The
- * embedder config slot enables recall by query text.
+ * `embedder` slot enables recall by query text; the `verifyCaller` slot enables
+ * the direct-HTTP handlers mounted in `http.ts`.
  */
 export const agentMemory = new AgentMemory(components.memory, {
-  embedder: async (text) => fakeEmbed(text)
+  embedder: async (text) => fakeEmbed(text),
+  verifyCaller: fakeVerifyCaller
 });
 
 /** Trivial health check proving the example app and mounted component load. */

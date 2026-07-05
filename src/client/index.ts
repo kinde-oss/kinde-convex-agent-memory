@@ -49,6 +49,40 @@ export type RunActionCtx = Pick<
  */
 export type RunQueryCtx = Pick<GenericActionCtx<GenericDataModel>, 'runQuery'>;
 
+/**
+ * The ctx an HTTP handler from {@link AgentMemory.httpHandlers} runs with. A
+ * Convex `httpAction` runs as an ACTION, so its ctx can `runQuery`,
+ * `runMutation`, AND `runAction` — the seam needs all three (write/get/list are
+ * mutations, recall is an action).
+ */
+export type RunHttpActionCtx = Pick<
+  GenericActionCtx<GenericDataModel>,
+  'runQuery' | 'runMutation' | 'runAction'
+>;
+
+/**
+ * A Convex `httpAction`-shaped handler: `(ctx, request) => Promise<Response>`.
+ * The app wraps each with its own generated `httpAction(...)` and mounts it on
+ * its `httpRouter`. Kept `httpAction`-free here because the builder is
+ * app-generated and the component/client import neither the app nor a framework.
+ */
+export type HttpActionHandler = (
+  ctx: RunHttpActionCtx,
+  request: Request
+) => Promise<Response>;
+
+/**
+ * The core memory operations exposed over HTTP by
+ * {@link AgentMemory.httpHandlers}. Each is a raw handler the app mounts:
+ * `http.route({path, method: 'POST', handler: httpAction(handlers.write)})`.
+ */
+export interface AgentMemoryHttpHandlers {
+  write: HttpActionHandler;
+  get: HttpActionHandler;
+  list: HttpActionHandler;
+  recall: HttpActionHandler;
+}
+
 // The component functions' exact arg/return types, recovered from the
 // generated component API so the client never re-declares (or drifts from)
 // the validators.
@@ -564,4 +598,503 @@ export class AgentMemory {
   ): Promise<MemoryRevocationInspection> {
     return await ctx.runQuery(this.component.revocations.inspect, args);
   }
+
+  /**
+   * Build the DIRECT-HTTP handlers (write/get/list/recall) for the app to mount
+   * on its own `httpRouter`. THE SEAM'S CONTRACT:
+   *
+   * - REQUIRES `config.verifyCaller`: you cannot serve HTTP without a way to
+   *   verify who is calling, so this THROWS a typed `verify_caller_not_configured`
+   *   at mount time (when the app calls this) if the slot is empty.
+   * - The verified caller is the ONLY source of `subject` and `orgCode` — the
+   *   server-verified tenant comes from the token, NEVER the request body. The
+   *   body carries only the operation payload (key, content, filter, query, …).
+   * - BODY-vs-TOKEN CONFLICT: a body-supplied `orgCode` is passed as
+   *   `claimedOrgCode`, so the EXISTING `tenant_context_conflict` machinery
+   *   rejects a mismatch AND audits it inside the governed op — the seam invents
+   *   no new tenant logic and the body cannot smuggle a foreign tenant. A
+   *   body-supplied `subject` is ignored outright.
+   * - TOKEN SCOPES ARE NOT MEMORY GRANTS: `verifyCaller`'s `scopes` describe the
+   *   token and ride along in `claims`; they do NOT auto-grant the component's
+   *   own P4 grant scopes. Grants remain the component's authority — an app that
+   *   wants a token scope to imply a grant must call `grant()` explicitly.
+   * - AUDIT BOUNDARY: seam-level rejections (missing/bad token, malformed body)
+   *   happen BEFORE any governed call and write NO audit row. Once a handler
+   *   invokes a governed op, that op audits exactly once (denials included) — the
+   *   audit always comes from the component, never the seam.
+   */
+  httpHandlers(): AgentMemoryHttpHandlers {
+    const verifyCaller = this.options.verifyCaller;
+    if (verifyCaller === undefined) {
+      throw new ConvexError({
+        code: 'verify_caller_not_configured',
+        message:
+          'AgentMemory.httpHandlers() requires `config.verifyCaller` on the client (new AgentMemory(component, {verifyCaller})). HTTP callers cannot be served without a way to verify the bearer token and resolve the server-verified tenant.'
+      });
+    }
+    return buildHttpHandlers(this, verifyCaller);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// THE DIRECT-HTTP SEAM (P7). Client-side handlers the app mounts on its own
+// http router; see AgentMemory.httpHandlers for the contract. Everything here
+// runs in the app's httpAction and goes through the client methods only — it
+// touches no component table directly.
+// ---------------------------------------------------------------------------
+
+/** The subset of {@link AgentMemory} the HTTP handlers drive. */
+interface HttpMemoryClient {
+  write(ctx: RunHttpActionCtx, args: MemoryWriteArgs): Promise<MemoryWriteOk>;
+  get(ctx: RunHttpActionCtx, args: MemoryGetArgs): Promise<MemoryRecord | null>;
+  list(ctx: RunHttpActionCtx, args: MemoryListArgs): Promise<MemoryListOk>;
+  recall(
+    ctx: RunHttpActionCtx,
+    args: MemoryRecallArgs
+  ): Promise<MemoryRecallOk>;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isFiniteNumberArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every(isFiniteNumber);
+}
+
+function isMetadataArg(
+  value: unknown
+): value is NonNullable<MemoryWriteArgs['metadata']> {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  const isPrimitive = (member: unknown): boolean =>
+    member === null ||
+    typeof member === 'string' ||
+    typeof member === 'number' ||
+    typeof member === 'boolean';
+  return Object.values(value).every(
+    (member) =>
+      isPrimitive(member) ||
+      (Array.isArray(member) && member.every(isPrimitive))
+  );
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {'content-type': 'application/json'}
+  });
+}
+
+/** A typed, JSON, non-cross-tenant-leaking error response. */
+function httpError(
+  status: number,
+  code: string,
+  message: string,
+  correlationId?: string
+): Response {
+  return jsonResponse(status, {
+    ok: false,
+    code,
+    message,
+    ...(correlationId === undefined ? {} : {correlationId})
+  });
+}
+
+/**
+ * Recover the typed payload of a ConvexError thrown by a client method. Handles
+ * convex-test's occasional re-serialization of `.data` to a JSON string.
+ */
+function typedError(
+  error: unknown
+): {code: string; message: string; correlationId?: string} | null {
+  if (!(error instanceof ConvexError)) {
+    return null;
+  }
+  const raw: unknown = error.data;
+  let data: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = raw;
+    }
+  }
+  if (!isPlainObject(data) || typeof data.code !== 'string') {
+    return null;
+  }
+  return {
+    code: data.code,
+    message:
+      typeof data.message === 'string'
+        ? data.message
+        : 'The operation was denied.',
+    correlationId:
+      typeof data.correlationId === 'string' ? data.correlationId : undefined
+  };
+}
+
+/** Map a governed/typed error code to an HTTP status. */
+function statusForCode(code: string): number {
+  switch (code) {
+    case 'tenant_context_conflict':
+    case 'scope_not_granted':
+    case 'revoked':
+      return 403;
+    case 'embedder_not_configured':
+    case 'embedder_response_malformed':
+      return 500;
+    default:
+      // Every other typed code is an argument/validation denial.
+      return 400;
+  }
+}
+
+/** Turn a caught error (governed denial or otherwise) into an HTTP response. */
+function responseForError(error: unknown): Response {
+  const typed = typedError(error);
+  if (typed === null) {
+    return httpError(
+      500,
+      'internal_error',
+      'An unexpected error occurred while handling the request.'
+    );
+  }
+  return httpError(
+    statusForCode(typed.code),
+    typed.code,
+    typed.message,
+    typed.correlationId
+  );
+}
+
+interface VerifiedIdentity {
+  subject: string;
+  orgCode: string;
+}
+
+type AuthOutcome =
+  | {ok: true; identity: VerifiedIdentity}
+  | {ok: false; response: Response};
+
+/**
+ * Extract the bearer token, verify it, and resolve the server-verified tenant.
+ * All failures here are SEAM-LEVEL (pre-governed-op): they write no audit row.
+ */
+async function authenticate(
+  verifyCaller: VerifyCaller,
+  request: Request
+): Promise<AuthOutcome> {
+  const header = request.headers.get('authorization');
+  if (header === null) {
+    return {
+      ok: false,
+      response: httpError(
+        401,
+        'missing_authorization',
+        'The request is missing the Authorization header.'
+      )
+    };
+  }
+  const match = /^Bearer[ ]+(\S+)$/.exec(header);
+  if (match === null) {
+    return {
+      ok: false,
+      response: httpError(
+        401,
+        'malformed_authorization',
+        "The Authorization header must be of the form 'Bearer <token>'."
+      )
+    };
+  }
+  let caller: VerifiedCaller;
+  try {
+    caller = await verifyCaller(match[1]);
+  } catch {
+    // A verifyCaller that throws is a rejected token — 401, message fixed so no
+    // internal detail (or cross-tenant hint) leaks.
+    return {
+      ok: false,
+      response: httpError(
+        401,
+        'unauthorized',
+        'The bearer token could not be verified.'
+      )
+    };
+  }
+  if (
+    !isPlainObject(caller) ||
+    typeof caller.subject !== 'string' ||
+    caller.subject === '' ||
+    typeof caller.orgCode !== 'string' ||
+    caller.orgCode === ''
+  ) {
+    // Wrapped exactly like a malformed embedder response: a typed shape error.
+    return {
+      ok: false,
+      response: httpError(
+        500,
+        'verify_caller_response_malformed',
+        'verifyCaller returned a response without a non-empty `subject` and `orgCode`; a tenant-scoped verified caller is required.'
+      )
+    };
+  }
+  return {
+    ok: true,
+    identity: {subject: caller.subject, orgCode: caller.orgCode}
+  };
+}
+
+/** Parse the request body as a JSON object, or null if malformed. */
+async function parseJsonBody(
+  request: Request
+): Promise<Record<string, unknown> | null> {
+  let parsed: unknown;
+  try {
+    parsed = await request.json();
+  } catch {
+    return null;
+  }
+  return isPlainObject(parsed) ? parsed : null;
+}
+
+/** A body-supplied orgCode rides as `claimedOrgCode` (the conflict path). */
+function claimedOrgCodeFromBody(
+  body: Record<string, unknown>
+): string | undefined {
+  return typeof body.orgCode === 'string' ? body.orgCode : undefined;
+}
+
+/** Whitelist-parse the list filter; returns 'invalid' on any shape error. */
+function parseListFilter(value: unknown): MemoryListFilter | 'invalid' {
+  if (!isPlainObject(value)) {
+    return 'invalid';
+  }
+  const filter: MemoryListFilter = {};
+  if (value.bySubject !== undefined) {
+    if (typeof value.bySubject !== 'string') return 'invalid';
+    filter.bySubject = value.bySubject;
+  }
+  if (value.keyPrefix !== undefined) {
+    if (typeof value.keyPrefix !== 'string') return 'invalid';
+    filter.keyPrefix = value.keyPrefix;
+  }
+  if (value.writtenAfter !== undefined) {
+    if (!isFiniteNumber(value.writtenAfter)) return 'invalid';
+    filter.writtenAfter = value.writtenAfter;
+  }
+  if (value.writtenBefore !== undefined) {
+    if (!isFiniteNumber(value.writtenBefore)) return 'invalid';
+    filter.writtenBefore = value.writtenBefore;
+  }
+  if (value.metadataEquals !== undefined) {
+    const me = value.metadataEquals;
+    if (!isPlainObject(me) || typeof me.field !== 'string') return 'invalid';
+    const memberValue = me.value;
+    if (
+      !(
+        memberValue === null ||
+        typeof memberValue === 'string' ||
+        typeof memberValue === 'number' ||
+        typeof memberValue === 'boolean'
+      )
+    ) {
+      return 'invalid';
+    }
+    filter.metadataEquals = {field: me.field, value: memberValue};
+  }
+  return filter;
+}
+
+function malformedBody(message: string): Response {
+  return httpError(400, 'request_body_malformed', message);
+}
+
+function buildHttpHandlers(
+  client: HttpMemoryClient,
+  verifyCaller: VerifyCaller
+): AgentMemoryHttpHandlers {
+  const write: HttpActionHandler = async (ctx, request) => {
+    const auth = await authenticate(verifyCaller, request);
+    if (!auth.ok) return auth.response;
+    const body = await parseJsonBody(request);
+    if (body === null) {
+      return malformedBody('The request body must be a JSON object.');
+    }
+    const {key, content} = body;
+    if (typeof key !== 'string' || typeof content !== 'string') {
+      return malformedBody(
+        '`write` requires a string `key` and string `content`.'
+      );
+    }
+    const metadata = body.metadata;
+    if (metadata !== undefined && !isMetadataArg(metadata)) {
+      return malformedBody(
+        '`metadata` must be an object of primitive or primitive-array values.'
+      );
+    }
+    const embedding = body.embedding;
+    if (embedding !== undefined && !isFiniteNumberArray(embedding)) {
+      return malformedBody('`embedding` must be an array of finite numbers.');
+    }
+    const idempotencyKey = body.idempotencyKey;
+    if (idempotencyKey !== undefined && typeof idempotencyKey !== 'string') {
+      return malformedBody('`idempotencyKey` must be a string.');
+    }
+    const correlationId = body.correlationId;
+    if (correlationId !== undefined && typeof correlationId !== 'string') {
+      return malformedBody('`correlationId` must be a string.');
+    }
+    const claimedOrgCode = claimedOrgCodeFromBody(body);
+    try {
+      const result = await client.write(ctx, {
+        subject: auth.identity.subject,
+        orgCode: auth.identity.orgCode,
+        ...(claimedOrgCode === undefined ? {} : {claimedOrgCode}),
+        key,
+        content,
+        ...(metadata === undefined ? {} : {metadata}),
+        ...(embedding === undefined ? {} : {embedding}),
+        ...(idempotencyKey === undefined ? {} : {idempotencyKey}),
+        ...(correlationId === undefined ? {} : {correlationId})
+      });
+      // `result` is already `{ok: true, memoryId, outcome, correlationId}`.
+      return jsonResponse(200, result);
+    } catch (error) {
+      return responseForError(error);
+    }
+  };
+
+  const get: HttpActionHandler = async (ctx, request) => {
+    const auth = await authenticate(verifyCaller, request);
+    if (!auth.ok) return auth.response;
+    const body = await parseJsonBody(request);
+    if (body === null) {
+      return malformedBody('The request body must be a JSON object.');
+    }
+    const key = body.key;
+    if (typeof key !== 'string') {
+      return malformedBody('`get` requires a string `key`.');
+    }
+    const correlationId = body.correlationId;
+    if (correlationId !== undefined && typeof correlationId !== 'string') {
+      return malformedBody('`correlationId` must be a string.');
+    }
+    const claimedOrgCode = claimedOrgCodeFromBody(body);
+    try {
+      const memory = await client.get(ctx, {
+        subject: auth.identity.subject,
+        orgCode: auth.identity.orgCode,
+        ...(claimedOrgCode === undefined ? {} : {claimedOrgCode}),
+        key,
+        ...(correlationId === undefined ? {} : {correlationId})
+      });
+      return jsonResponse(200, {ok: true, memory});
+    } catch (error) {
+      return responseForError(error);
+    }
+  };
+
+  const list: HttpActionHandler = async (ctx, request) => {
+    const auth = await authenticate(verifyCaller, request);
+    if (!auth.ok) return auth.response;
+    const body = await parseJsonBody(request);
+    if (body === null) {
+      return malformedBody('The request body must be a JSON object.');
+    }
+    const numItems = body.numItems;
+    if (!isFiniteNumber(numItems)) {
+      return malformedBody('`list` requires a numeric `numItems`.');
+    }
+    let cursor: string | null = null;
+    if (body.cursor !== undefined && body.cursor !== null) {
+      if (typeof body.cursor !== 'string') {
+        return malformedBody('`cursor` must be a string or null.');
+      }
+      cursor = body.cursor;
+    }
+    let filter: MemoryListFilter | undefined;
+    if (body.filter !== undefined) {
+      const parsed = parseListFilter(body.filter);
+      if (parsed === 'invalid') {
+        return malformedBody('`filter` has an invalid shape.');
+      }
+      filter = parsed;
+    }
+    const correlationId = body.correlationId;
+    if (correlationId !== undefined && typeof correlationId !== 'string') {
+      return malformedBody('`correlationId` must be a string.');
+    }
+    const claimedOrgCode = claimedOrgCodeFromBody(body);
+    try {
+      const result = await client.list(ctx, {
+        subject: auth.identity.subject,
+        orgCode: auth.identity.orgCode,
+        ...(claimedOrgCode === undefined ? {} : {claimedOrgCode}),
+        ...(filter === undefined ? {} : {filter}),
+        paginationOpts: {numItems, cursor},
+        ...(correlationId === undefined ? {} : {correlationId})
+      });
+      return jsonResponse(200, {
+        ok: true,
+        page: result.page,
+        isDone: result.isDone,
+        continueCursor: result.continueCursor,
+        correlationId: result.correlationId
+      });
+    } catch (error) {
+      return responseForError(error);
+    }
+  };
+
+  const recall: HttpActionHandler = async (ctx, request) => {
+    const auth = await authenticate(verifyCaller, request);
+    if (!auth.ok) return auth.response;
+    const body = await parseJsonBody(request);
+    if (body === null) {
+      return malformedBody('The request body must be a JSON object.');
+    }
+    const query = body.query;
+    if (query !== undefined && typeof query !== 'string') {
+      return malformedBody('`query` must be a string.');
+    }
+    const embedding = body.embedding;
+    if (embedding !== undefined && !isFiniteNumberArray(embedding)) {
+      return malformedBody('`embedding` must be an array of finite numbers.');
+    }
+    const topK = body.topK;
+    if (topK !== undefined && !isFiniteNumber(topK)) {
+      return malformedBody('`topK` must be a number.');
+    }
+    const correlationId = body.correlationId;
+    if (correlationId !== undefined && typeof correlationId !== 'string') {
+      return malformedBody('`correlationId` must be a string.');
+    }
+    const claimedOrgCode = claimedOrgCodeFromBody(body);
+    try {
+      const result = await client.recall(ctx, {
+        subject: auth.identity.subject,
+        orgCode: auth.identity.orgCode,
+        ...(claimedOrgCode === undefined ? {} : {claimedOrgCode}),
+        ...(query === undefined ? {} : {query}),
+        ...(embedding === undefined ? {} : {embedding}),
+        ...(topK === undefined ? {} : {topK}),
+        ...(correlationId === undefined ? {} : {correlationId})
+      });
+      return jsonResponse(200, {
+        ok: true,
+        matches: result.matches,
+        correlationId: result.correlationId
+      });
+    } catch (error) {
+      return responseForError(error);
+    }
+  };
+
+  return {write, get, list, recall};
 }
