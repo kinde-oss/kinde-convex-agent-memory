@@ -337,3 +337,132 @@ export const listResultValidator = v.union(
   deniedResultValidator
 );
 export type ListResult = Infer<typeof listResultValidator>;
+
+// ---------------------------------------------------------------------------
+// P6: PROVENANCE TRACING AND THE PAGINATED AUDIT QUERY (read-only surfaces).
+// ---------------------------------------------------------------------------
+
+/**
+ * One audit row as returned by the read-only `audit.query` reporting surface.
+ * STRUCTURAL SAFETY: this is the EXACT shape of the `audit` table — it has no
+ * `content`, no `metadata`, no `embedding` field, and never has had one. Its
+ * only free-form string is `keyOrQueryDigest`, which is a keyed digest by
+ * construction (see `lib/digest.ts`). Audit rows are therefore structurally
+ * incapable of carrying memory bodies, so `audit.query` returns them verbatim
+ * and does NOT route them through the memory egress function (which is for
+ * memory records, a different shape).
+ */
+export const auditRowValidator = v.object({
+  _id: v.id('audit'),
+  _creationTime: v.number(),
+  orgCode: v.string(),
+  subject: v.string(),
+  ts: v.number(),
+  operation: operationValidator,
+  decision: auditDecisionValidator,
+  reasonCode: auditReasonValidator,
+  keyOrQueryDigest: v.string(),
+  correlationId: v.string(),
+  mandateId: nullableString
+});
+export type AuditRow = Infer<typeof auditRowValidator>;
+
+/**
+ * The CLOSED filter for `audit.query` (no `v.any()`). `since`/`until` are
+ * EXCLUSIVE numeric `ts` bounds; the rest are exact-equality refinements.
+ * Tenant scoping is NOT in this filter — it rides the index range from the
+ * `orgCode` argument and can never be a filter field.
+ */
+export const auditFilterValidator = v.object({
+  subject: v.optional(v.string()),
+  operation: v.optional(operationValidator),
+  decision: v.optional(auditDecisionValidator),
+  correlationId: v.optional(v.string()),
+  /** Exclusive lower bound on `ts` (strictly after). */
+  since: v.optional(v.number()),
+  /** Exclusive upper bound on `ts` (strictly before). */
+  until: v.optional(v.number())
+});
+export type AuditFilter = Infer<typeof auditFilterValidator>;
+
+/**
+ * `audit.query` result: one newest-first, tenant-scoped page. `audit.query`
+ * is a real reactive QUERY (it writes no audit row of its own), so unlike the
+ * governed operations it has no `correlationId` echo and no denial branch —
+ * its argument errors THROW (see the module doc on `audit.ts`).
+ */
+export const auditQueryResultValidator = v.object({
+  page: v.array(auditRowValidator),
+  isDone: v.boolean(),
+  continueCursor: v.string()
+});
+export type AuditQueryResult = Infer<typeof auditQueryResultValidator>;
+
+/**
+ * The PROVENANCE shape returned by `provenance.of`. DELIBERATELY CARRIES NO
+ * CONTENT: no `content`, no `metadata`, no `embedding` — only identity and
+ * provenance stamps. Because it can hold no memory body, this surface can
+ * never leak one even absent a redaction policy, so it needs no egress
+ * redaction. `createdBy`/`createdAt` are the IMMUTABLE creation event;
+ * `writtenBy`/`writtenAt`/`mandateId` are the LATEST write event (they
+ * re-stamp on every update while the creation stamp never moves).
+ */
+export const provenanceRecordValidator = v.object({
+  memoryId: v.id('memories'),
+  orgCode: v.string(),
+  key: v.string(),
+  subject: v.string(),
+  createdBy: v.string(),
+  createdAt: v.number(),
+  writtenBy: v.string(),
+  writtenAt: v.number(),
+  mandateId: nullableString
+});
+export type ProvenanceRecord = Infer<typeof provenanceRecordValidator>;
+
+/**
+ * `provenance.of` result: the provenance shape, or null when no memory with
+ * that id exists IN THIS TENANT — a memoryId belonging to another tenant is
+ * indistinguishable from a missing one (no cross-tenant existence oracle),
+ * exactly as read-by-key behaves.
+ */
+export const provenanceResultValidator = v.union(
+  provenanceRecordValidator,
+  v.null()
+);
+export type ProvenanceResult = Infer<typeof provenanceResultValidator>;
+
+/**
+ * One revocation row as returned by the read-only `revocations.inspect`
+ * reason-join surface. This is the ONE place `reason` (and the actor stamps)
+ * leave the store — deliberately, because inspecting a revocation that governs
+ * you is how "why was I denied" is answered. It is NEVER written to an audit
+ * row; the audit trail references the revocation only by its target digest.
+ */
+export const revocationRowValidator = v.object({
+  _id: v.id('revocations'),
+  _creationTime: v.number(),
+  kind: v.union(v.literal('global'), v.literal('org'), v.literal('subject')),
+  orgCode: nullableString,
+  subject: nullableString,
+  reason: v.string(),
+  revokedBy: v.string(),
+  revokedAt: v.number(),
+  liftedBy: nullableString,
+  liftedAt: v.union(v.number(), v.null())
+});
+export type RevocationRow = Infer<typeof revocationRowValidator>;
+
+/**
+ * `revocations.inspect` result: the active and historical revocation rows for
+ * one target, newest first, alongside the target's digest — the SAME digest a
+ * `revoked` denial audit row carries, so an auditor can confirm the join
+ * (audit row digest === this digest) followed the right target.
+ */
+export const inspectRevocationsResultValidator = v.object({
+  targetDigest: v.string(),
+  revocations: v.array(revocationRowValidator)
+});
+export type InspectRevocationsResult = Infer<
+  typeof inspectRevocationsResultValidator
+>;

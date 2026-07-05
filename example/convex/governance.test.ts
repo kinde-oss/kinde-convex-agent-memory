@@ -211,3 +211,64 @@ test('lifting a non-revoked target throws typed revocation_not_found through the
     'revocation_not_found'
   );
 });
+
+test('the three read surfaces work through the client (audit / provenance / reason-join)', async () => {
+  const t = initConvexTest();
+  // Seed a write, then update it so provenance has distinct create/write stamps.
+  const written = await t.mutation(api.example.writeMemory, {
+    subject: 'user_alice',
+    orgCode: 'org_alpha',
+    key: 'facts/sky',
+    content: 'the sky is blue'
+  });
+
+  // audit.query (runs as a QUERY through the client): newest-first, tenant-scoped.
+  const audit = await t.query(api.example.auditLog, {
+    orgCode: 'org_alpha',
+    subject: 'user_alice',
+    numItems: 50,
+    cursor: null
+  });
+  expect(audit.rows.length).toBeGreaterThan(0);
+  expect(audit.rows.every((row) => row.subject === 'user_alice')).toBe(true);
+  expect(audit.rows[0].operation).toBe('write');
+
+  // provenance.of (QUERY): returns provenance, never the body.
+  const prov = await t.query(api.example.memoryProvenance, {
+    orgCode: 'org_alpha',
+    memoryId: written.memoryId
+  });
+  expect(prov).not.toBeNull();
+  expect(prov?.createdBy).toBe('user_alice');
+  expect(JSON.stringify(prov)).not.toContain('the sky is blue');
+
+  // Revoke, then inspect (QUERY) the reason join.
+  await t.mutation(api.example.revokeCaller, {
+    subject: 'user_admin',
+    orgCode: 'org_alpha',
+    target: {kind: 'subject', orgCode: 'org_alpha', subject: 'user_alice'},
+    reason: 'client-visible-reason'
+  });
+  const inspection = await t.query(api.example.inspectRevocation, {
+    orgCode: 'org_alpha',
+    target: {kind: 'subject', orgCode: 'org_alpha', subject: 'user_alice'}
+  });
+  expect(inspection.revocations).toHaveLength(1);
+  expect(inspection.revocations[0].reason).toBe('client-visible-reason');
+  expect(typeof inspection.targetDigest).toBe('string');
+});
+
+test('a cross-tenant memoryId returns null provenance through the client', async () => {
+  const t = initConvexTest();
+  const written = await t.mutation(api.example.writeMemory, {
+    subject: 'user_alice',
+    orgCode: 'org_alpha',
+    key: 'k',
+    content: 'c'
+  });
+  const prov = await t.query(api.example.memoryProvenance, {
+    orgCode: 'org_beta',
+    memoryId: written.memoryId
+  });
+  expect(prov).toBeNull();
+});

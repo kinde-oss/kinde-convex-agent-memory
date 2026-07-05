@@ -57,7 +57,8 @@ import {isOperationPermitted} from './lib/grantStore.js';
 import {
   resolveRevocation,
   revocationDenial,
-  revocationMessage
+  revocationMessage,
+  revokedTargetDigest
 } from './lib/revocationStore.js';
 import {
   egressMemories,
@@ -184,7 +185,6 @@ export const write = mutation({
       ctx.db,
       'write',
       args,
-      keyDigest,
       correlationId
     );
     if (writeRevoked !== null) {
@@ -358,7 +358,6 @@ export const get = mutation({
       ctx.db,
       'get',
       args,
-      keyDigest,
       correlationId
     );
     if (getRevoked !== null) {
@@ -452,7 +451,6 @@ export const list = mutation({
       ctx.db,
       'list',
       args,
-      filterDigest,
       correlationId
     );
     if (listRevoked !== null) {
@@ -570,7 +568,9 @@ export const ensureRecallAccess = internalMutation({
     })
   ),
   handler: async (ctx, args) => {
-    // Revocation overlay FIRST: outranks the scope gate.
+    // Revocation overlay FIRST: outranks the scope gate. The `revoked` row
+    // records the revocation TARGET digest (the reason-join key), not the
+    // recall descriptor — same choice as revocationDenial for write/get/list.
     const level = await resolveRevocation(ctx.db, args.orgCode, args.subject);
     if (level !== null) {
       await recordAudit(ctx.db, {
@@ -579,7 +579,11 @@ export const ensureRecallAccess = internalMutation({
         operation: 'recall',
         decision: 'denied',
         reasonCode: 'revoked',
-        keyOrQueryDigest: args.keyOrQueryDigest,
+        keyOrQueryDigest: await revokedTargetDigest(
+          level,
+          args.orgCode,
+          args.subject
+        ),
         correlationId: args.correlationId,
         mandateId: null
       });

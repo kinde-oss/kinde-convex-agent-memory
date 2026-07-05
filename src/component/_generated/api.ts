@@ -9,6 +9,7 @@
  */
 
 import type * as access from "../access.js";
+import type * as audit from "../audit.js";
 import type * as grants from "../grants.js";
 import type * as lib_audit from "../lib/audit.js";
 import type * as lib_correlation from "../lib/correlation.js";
@@ -20,6 +21,7 @@ import type * as lib_redaction from "../lib/redaction.js";
 import type * as lib_revocationStore from "../lib/revocationStore.js";
 import type * as memory from "../memory.js";
 import type * as policy from "../policy.js";
+import type * as provenance from "../provenance.js";
 import type * as revocations from "../revocations.js";
 import type * as validators from "../validators.js";
 
@@ -32,6 +34,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   access: typeof access;
+  audit: typeof audit;
   grants: typeof grants;
   "lib/audit": typeof lib_audit;
   "lib/correlation": typeof lib_correlation;
@@ -43,6 +46,7 @@ const fullApi: ApiFromModules<{
   "lib/revocationStore": typeof lib_revocationStore;
   memory: typeof memory;
   policy: typeof policy;
+  provenance: typeof provenance;
   revocations: typeof revocations;
   validators: typeof validators;
 }> = anyApi as any;

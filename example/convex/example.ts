@@ -4,6 +4,7 @@ import {
   AgentMemory,
   EMBEDDING_DIMENSIONS
 } from '@kinde-oss/kinde-convex-agent-memory';
+import type {MemoryId} from '@kinde-oss/kinde-convex-agent-memory';
 import {v} from 'convex/values';
 
 /**
@@ -309,6 +310,148 @@ export const getMemory = mutation({
       content: memory.content,
       createdBy: memory.createdBy,
       writtenBy: memory.writtenBy
+    };
+  }
+});
+
+/**
+ * READ SURFACE 1 — the paginated audit log through the client. Runs as a QUERY
+ * (not a mutation): reading the log writes no audit row.
+ */
+export const auditLog = query({
+  args: {
+    orgCode: v.string(),
+    claimedOrgCode: v.optional(v.string()),
+    subject: v.optional(v.string()),
+    correlationId: v.optional(v.string()),
+    numItems: v.number(),
+    cursor: v.union(v.string(), v.null())
+  },
+  returns: v.object({
+    rows: v.array(
+      v.object({
+        subject: v.string(),
+        operation: v.string(),
+        decision: v.string(),
+        reasonCode: v.string(),
+        keyOrQueryDigest: v.string(),
+        correlationId: v.string(),
+        ts: v.number()
+      })
+    ),
+    isDone: v.boolean(),
+    continueCursor: v.string()
+  }),
+  handler: async (ctx, args) => {
+    const filter = {
+      ...(args.subject === undefined ? {} : {subject: args.subject}),
+      ...(args.correlationId === undefined
+        ? {}
+        : {correlationId: args.correlationId})
+    };
+    const page = await agentMemory.auditQuery(ctx, {
+      orgCode: args.orgCode,
+      ...(args.claimedOrgCode === undefined
+        ? {}
+        : {claimedOrgCode: args.claimedOrgCode}),
+      ...(Object.keys(filter).length === 0 ? {} : {filter}),
+      paginationOpts: {numItems: args.numItems, cursor: args.cursor}
+    });
+    return {
+      rows: page.page.map((row) => ({
+        subject: row.subject,
+        operation: row.operation,
+        decision: row.decision,
+        reasonCode: row.reasonCode,
+        keyOrQueryDigest: row.keyOrQueryDigest,
+        correlationId: row.correlationId,
+        ts: row.ts
+      })),
+      isDone: page.isDone,
+      continueCursor: page.continueCursor
+    };
+  }
+});
+
+/**
+ * READ SURFACE 2 — a record's provenance through the client. Runs as a QUERY.
+ * `memoryId` arrives as a plain string (the app stored it from a write result)
+ * and is re-branded via the client's exported {@link MemoryId} type. Returns no
+ * content/metadata by construction.
+ */
+export const memoryProvenance = query({
+  args: {
+    orgCode: v.string(),
+    claimedOrgCode: v.optional(v.string()),
+    memoryId: v.string()
+  },
+  returns: v.union(
+    v.null(),
+    v.object({
+      key: v.string(),
+      subject: v.string(),
+      createdBy: v.string(),
+      createdAt: v.number(),
+      writtenBy: v.string(),
+      writtenAt: v.number()
+    })
+  ),
+  handler: async (ctx, args) => {
+    const provenance = await agentMemory.provenanceOf(ctx, {
+      orgCode: args.orgCode,
+      ...(args.claimedOrgCode === undefined
+        ? {}
+        : {claimedOrgCode: args.claimedOrgCode}),
+      memoryId: args.memoryId as MemoryId
+    });
+    if (provenance === null) {
+      return null;
+    }
+    return {
+      key: provenance.key,
+      subject: provenance.subject,
+      createdBy: provenance.createdBy,
+      createdAt: provenance.createdAt,
+      writtenBy: provenance.writtenBy,
+      writtenAt: provenance.writtenAt
+    };
+  }
+});
+
+/**
+ * READ SURFACE 3 — the revocation reason-join through the client. Runs as a
+ * QUERY. Given a target, returns the target digest (matches the `revoked` audit
+ * row's digest) and the revocation rows INCLUDING the reason.
+ */
+export const inspectRevocation = query({
+  args: {
+    orgCode: v.string(),
+    claimedOrgCode: v.optional(v.string()),
+    target: revocationTargetArg
+  },
+  returns: v.object({
+    targetDigest: v.string(),
+    revocations: v.array(
+      v.object({
+        reason: v.string(),
+        revokedBy: v.string(),
+        revokedAt: v.number(),
+        liftedBy: v.union(v.string(), v.null()),
+        liftedAt: v.union(v.number(), v.null())
+      })
+    )
+  }),
+  handler: async (ctx, args) => {
+    const result = await agentMemory.inspectRevocation(ctx, args);
+    return {
+      targetDigest: result.targetDigest,
+      revocations: result.revocations.map((row) => ({
+        reason: row.reason,
+        revokedBy: row.revokedBy,
+        revokedAt: row.revokedAt,
+        liftedBy: row.liftedBy,
+        liftedAt: row.liftedAt
+      }))
     };
   }
 });

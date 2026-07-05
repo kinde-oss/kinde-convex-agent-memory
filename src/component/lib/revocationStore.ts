@@ -17,6 +17,7 @@
  * revocation commits is denied; the call after a lift commits succeeds.
  */
 import {deny} from './audit.js';
+import {digestRevocationTarget} from './digest.js';
 import type {MutationCtx, QueryCtx} from '../_generated/server.js';
 import type {Doc, Id} from '../_generated/dataModel.js';
 import type {
@@ -203,6 +204,48 @@ export function revocationMessage(level: RevocationLevel): string {
 }
 
 /**
+ * The concrete target a matched revocation LEVEL corresponds to, reconstructed
+ * from the caller's tenant/subject. This is the target whose digest a `revoked`
+ * audit row carries — see {@link revokedTargetDigest}.
+ */
+export function revocationTargetForLevel(
+  level: RevocationLevel,
+  orgCode: string,
+  subject: string
+): RevocationTarget {
+  switch (level) {
+    case 'global':
+      return {kind: 'global', orgCode: null, subject: null};
+    case 'org':
+      return {kind: 'org', orgCode, subject: null};
+    case 'subject':
+      return {kind: 'subject', orgCode, subject};
+  }
+}
+
+/**
+ * The audit digest a `revoked` denial records: the digest of the REVOCATION
+ * TARGET that fired, NOT the memory key/filter the operation was attempting.
+ * This is THE JOIN KEY — an auditor who sees a `revoked` row can match this
+ * digest against `digestRevocationTarget(candidate)` for the subject/org/global
+ * targets covering that (orgCode, subject) to learn WHICH revocation blocked
+ * the call, then read its reason via `revocations.inspect` — all without the
+ * reason ever entering the append-only audit log.
+ */
+export async function revokedTargetDigest(
+  level: RevocationLevel,
+  orgCode: string,
+  subject: string
+): Promise<string> {
+  const target = revocationTargetForLevel(level, orgCode, subject);
+  return await digestRevocationTarget(
+    target.kind,
+    target.orgCode,
+    target.subject
+  );
+}
+
+/**
  * THE OVERLAY DENIAL, called by every governed memory operation AFTER the
  * tenant-conflict check and BEFORE the scope gate. Resolves global → org →
  * subject; if any level is active, audits and returns the typed `revoked`
@@ -211,12 +254,16 @@ export function revocationMessage(level: RevocationLevel): string {
  * the operation proceeds to the scope gate. This OUTRANKS grants: a revoked
  * caller is denied here no matter what scopes it holds, and no fresh grant can
  * reach the scope gate past this check — only lifting the revocation does.
+ *
+ * DIGEST CHOICE: the `revoked` row records the REVOCATION TARGET digest (see
+ * {@link revokedTargetDigest}), not the operation's key/filter digest — a
+ * revoked caller is blocked regardless of what it was reaching for, and the
+ * target digest is what makes the reason join followable.
  */
 export async function revocationDenial(
   db: WriteDb,
   operation: MemoryOperation,
   args: {orgCode: string; subject: string},
-  keyOrQueryDigest: string,
   correlationId: string
 ): Promise<DeniedResult | null> {
   const level = await resolveRevocation(db, args.orgCode, args.subject);
@@ -229,7 +276,7 @@ export async function revocationDenial(
     args,
     'revoked',
     revocationMessage(level),
-    keyOrQueryDigest,
+    await revokedTargetDigest(level, args.orgCode, args.subject),
     correlationId
   );
 }
@@ -270,4 +317,29 @@ export async function liftRevocationRow(
   now: number
 ): Promise<void> {
   await db.patch('revocations', revocation._id, {liftedBy, liftedAt: now});
+}
+
+/**
+ * All revocation rows for one exact target — ACTIVE and HISTORICAL (lifted) —
+ * newest first, for the reason-join inspection surface (`revocations.inspect`).
+ * The lookup is the same exact-equality `by_kind_org_subject` prefix the
+ * overlay uses, so it stays tenant-scoped (org/subject targets pin orgCode; a
+ * `global` target pins kind='global' with null org/subject and is intentionally
+ * tenant-agnostic — a global revocation governs every tenant, so any tenant it
+ * governs may read its existence and reason).
+ */
+export async function findRevocationsForTarget(
+  db: Db,
+  target: RevocationTarget
+): Promise<Doc<'revocations'>[]> {
+  const rows = await db
+    .query('revocations')
+    .withIndex('by_kind_org_subject', (q) =>
+      q
+        .eq('kind', target.kind)
+        .eq('orgCode', target.orgCode)
+        .eq('subject', target.subject)
+    )
+    .collect();
+  return rows.sort((a, b) => b.revokedAt - a.revokedAt);
 }

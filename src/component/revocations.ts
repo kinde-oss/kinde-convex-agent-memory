@@ -20,19 +20,21 @@
  * global/org/subject targets that outrank grants entirely — and is a separate
  * table and separate lifecycle.
  */
-import {mutation} from './_generated/server.js';
+import {mutation, query} from './_generated/server.js';
 import {v} from 'convex/values';
 import {deny, recordAudit} from './lib/audit.js';
 import {resolveCorrelationId} from './lib/correlation.js';
 import {digestRevocationTarget} from './lib/digest.js';
-import {requireNonEmpty} from './lib/errors.js';
+import {fail, requireNonEmpty} from './lib/errors.js';
 import {
   findActiveRevocation,
+  findRevocationsForTarget,
   insertRevocation,
   liftRevocationRow,
   normalizeRevocationTarget
 } from './lib/revocationStore.js';
 import {
+  inspectRevocationsResultValidator,
   liftRevocationResultValidator,
   revocationTargetValidator,
   revokeResultValidator
@@ -218,5 +220,62 @@ export const liftRevocation = mutation({
       mandateId: null
     });
     return {ok: true as const, revocationId: active._id, correlationId};
+  }
+});
+
+/**
+ * THE REASON-JOIN SURFACE (read-only QUERY, same query-vs-mutation exception as
+ * `audit.query`/`provenance.of`: inspecting revocations writes no audit row).
+ *
+ * Given a target, return its active and historical revocation rows — INCLUDING
+ * the `reason` and actor stamps — newest first, plus the target's digest. This
+ * is how "why was this call denied `revoked`?" is answered WITHOUT the reason
+ * ever entering the append-only audit log: the `revoked` denial row carries the
+ * target DIGEST (see `revocationDenial`); an auditor matches that digest to
+ * `targetDigest` here and reads the reason from the returned rows.
+ *
+ * TENANT SCOPING: `org`/`subject` targets are confined to the caller's
+ * server-verified tenant by `normalizeRevocationTarget` (a mismatch throws
+ * typed `invalid_revocation_target`). A `global` target is intentionally
+ * tenant-agnostic and readable from any tenant-scoped call — DOCUMENTED CHOICE:
+ * a global revocation governs every tenant, so a tenant it governs may read its
+ * existence and reason (the reason explains a denial that affects that tenant).
+ * Argument errors THROW (this is a query and cannot audit).
+ */
+export const inspect = query({
+  args: {
+    orgCode: v.string(),
+    claimedOrgCode: v.optional(v.string()),
+    target: revocationTargetValidator
+  },
+  returns: inspectRevocationsResultValidator,
+  handler: async (ctx, args) => {
+    requireNonEmpty(args.orgCode, 'orgCode');
+    if (
+      args.claimedOrgCode !== undefined &&
+      args.claimedOrgCode !== args.orgCode
+    ) {
+      fail(
+        'tenant_context_conflict',
+        'The claimed org code does not match the server-verified tenant context.'
+      );
+    }
+    const {target, problem} = normalizeRevocationTarget(
+      args.target,
+      args.orgCode
+    );
+    if (target === null) {
+      fail(
+        'invalid_revocation_target',
+        problem ?? 'Invalid revocation target.'
+      );
+    }
+    const targetDigest = await digestRevocationTarget(
+      target.kind,
+      target.orgCode,
+      target.subject
+    );
+    const revocations = await findRevocationsForTarget(ctx.db, target);
+    return {targetDigest, revocations};
   }
 });

@@ -287,6 +287,28 @@ export async function getMemoriesByIds(
   return docs;
 }
 
+/**
+ * Fetch ONE memory by id WITHIN the tenant, for the provenance surface. Unlike
+ * {@link getMemoriesByIds} (belt-and-braces for vector-search hits, where a
+ * tenant mismatch is impossible and so fails loudly), here the id is
+ * caller-supplied and may legitimately belong to ANOTHER tenant — so a mismatch
+ * is EXPECTED and resolves to null, exactly as read-by-key does for a key held
+ * elsewhere. No cross-tenant existence oracle: "not yours" and "does not exist"
+ * are indistinguishable. Uses the table-scoped `db.get('memories', id)` overload
+ * so the structural grep still sees this access.
+ */
+export async function getMemoryByIdInTenant(
+  db: Db,
+  orgCode: string,
+  id: Id<'memories'>
+): Promise<Doc<'memories'> | null> {
+  const doc = await db.get('memories', id);
+  if (doc === null || doc.orgCode !== orgCode) {
+    return null;
+  }
+  return doc;
+}
+
 export interface InsertMemoryInput {
   orgCode: string;
   subject: string;

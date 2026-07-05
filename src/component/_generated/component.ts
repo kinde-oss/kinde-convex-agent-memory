@@ -23,6 +23,94 @@ import type { FunctionReference } from "convex/server";
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
+    audit: {
+      query: FunctionReference<
+        "query",
+        "internal",
+        {
+          claimedOrgCode?: string;
+          filter?: {
+            correlationId?: string;
+            decision?: "ok" | "denied";
+            operation?:
+              | "write"
+              | "get"
+              | "list"
+              | "recall"
+              | "grant"
+              | "revoke_grant"
+              | "set_redaction"
+              | "revoke"
+              | "lift_revocation";
+            since?: number;
+            subject?: string;
+            until?: number;
+          };
+          orgCode: string;
+          paginationOpts: {
+            cursor: string | null;
+            endCursor?: string | null;
+            id?: number;
+            maximumBytesRead?: number;
+            maximumRowsRead?: number;
+            numItems: number;
+          };
+        },
+        {
+          continueCursor: string;
+          isDone: boolean;
+          page: Array<{
+            _creationTime: number;
+            _id: string;
+            correlationId: string;
+            decision: "ok" | "denied";
+            keyOrQueryDigest: string;
+            mandateId: string | null;
+            operation:
+              | "write"
+              | "get"
+              | "list"
+              | "recall"
+              | "grant"
+              | "revoke_grant"
+              | "set_redaction"
+              | "revoke"
+              | "lift_revocation";
+            orgCode: string;
+            reasonCode:
+              | "created"
+              | "updated"
+              | "idempotent_replay"
+              | "found"
+              | "not_found"
+              | "listed"
+              | "recalled"
+              | "granted"
+              | "already_granted"
+              | "revoked"
+              | "redaction_set"
+              | "redaction_cleared"
+              | "tenant_context_conflict"
+              | "idempotency_key_reused"
+              | "invalid_filter"
+              | "invalid_embedding"
+              | "invalid_topk"
+              | "scope_not_granted"
+              | "grant_not_found"
+              | "policy_not_found"
+              | "invalid_redaction_fields"
+              | "revocation_created"
+              | "already_revoked"
+              | "revocation_lifted"
+              | "revocation_not_found"
+              | "invalid_revocation_target";
+            subject: string;
+            ts: number;
+          }>;
+        },
+        Name
+      >;
+    };
     grants: {
       grant: FunctionReference<
         "mutation",
@@ -371,7 +459,60 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
     };
+    provenance: {
+      of: FunctionReference<
+        "query",
+        "internal",
+        {
+          claimedOrgCode?: string;
+          correlationId?: string;
+          memoryId: string;
+          orgCode: string;
+        },
+        {
+          createdAt: number;
+          createdBy: string;
+          key: string;
+          mandateId: string | null;
+          memoryId: string;
+          orgCode: string;
+          subject: string;
+          writtenAt: number;
+          writtenBy: string;
+        } | null,
+        Name
+      >;
+    };
     revocations: {
+      inspect: FunctionReference<
+        "query",
+        "internal",
+        {
+          claimedOrgCode?: string;
+          orgCode: string;
+          target: {
+            kind: "global" | "org" | "subject";
+            orgCode?: string;
+            subject?: string;
+          };
+        },
+        {
+          revocations: Array<{
+            _creationTime: number;
+            _id: string;
+            kind: "global" | "org" | "subject";
+            liftedAt: number | null;
+            liftedBy: string | null;
+            orgCode: string | null;
+            reason: string;
+            revokedAt: number;
+            revokedBy: string;
+            subject: string | null;
+          }>;
+          targetDigest: string;
+        },
+        Name
+      >;
       liftRevocation: FunctionReference<
         "mutation",
         "internal",

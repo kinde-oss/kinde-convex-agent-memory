@@ -39,6 +39,16 @@ export type RunActionCtx = Pick<
   'runAction'
 >;
 
+/**
+ * The ctx shape the read-only reporting surfaces need. `auditQuery`,
+ * `provenanceOf`, and `inspectRevocation` run as QUERIES (`ctx.runQuery`), not
+ * mutations — they are the FIRST client methods to do so, because they write
+ * NO audit row (see the query-vs-mutation exception on the component's
+ * `audit.ts`). Any app function context — query, mutation, or action — supplies
+ * `runQuery`.
+ */
+export type RunQueryCtx = Pick<GenericActionCtx<GenericDataModel>, 'runQuery'>;
+
 // The component functions' exact arg/return types, recovered from the
 // generated component API so the client never re-declares (or drifts from)
 // the validators.
@@ -67,6 +77,16 @@ type LiftRevocationArgs = FunctionArgs<
 >;
 type LiftRevocationResult = FunctionReturnType<
   ComponentApi['revocations']['liftRevocation']
+>;
+type AuditQueryArgs = FunctionArgs<ComponentApi['audit']['query']>;
+type AuditQueryResult = FunctionReturnType<ComponentApi['audit']['query']>;
+type ProvenanceOfArgs = FunctionArgs<ComponentApi['provenance']['of']>;
+type ProvenanceOfResult = FunctionReturnType<ComponentApi['provenance']['of']>;
+type InspectRevocationArgs = FunctionArgs<
+  ComponentApi['revocations']['inspect']
+>;
+type InspectRevocationResult = FunctionReturnType<
+  ComponentApi['revocations']['inspect']
 >;
 
 /** Arguments to {@link AgentMemory.write}. */
@@ -116,6 +136,27 @@ export type MemoryRevokeOk = Extract<RevokeResult, {ok: true}>;
 export type MemoryLiftRevocationArgs = LiftRevocationArgs;
 /** A successful lift: the lifted revocation's id and the correlation id. */
 export type MemoryLiftRevocationOk = Extract<LiftRevocationResult, {ok: true}>;
+/** Arguments to {@link AgentMemory.auditQuery}. */
+export type MemoryAuditQueryArgs = AuditQueryArgs;
+/** One newest-first, tenant-scoped page of audit rows. */
+export type MemoryAuditPage = AuditQueryResult;
+/** The closed audit-filter shape. */
+export type MemoryAuditFilter = NonNullable<AuditQueryArgs['filter']>;
+/**
+ * The branded id of a memory record (`Id<'memories'>`). A consuming app stores
+ * it as a plain string and passes it back to {@link AgentMemory.provenanceOf};
+ * this type lets the app re-brand a stored string id without reaching into the
+ * component's generated data model.
+ */
+export type MemoryId = ProvenanceOfArgs['memoryId'];
+/** Arguments to {@link AgentMemory.provenanceOf}. */
+export type MemoryProvenanceArgs = ProvenanceOfArgs;
+/** A record's provenance stamps (no content/metadata), or null. */
+export type MemoryProvenance = NonNullable<ProvenanceOfResult>;
+/** Arguments to {@link AgentMemory.inspectRevocation}. */
+export type MemoryInspectRevocationArgs = InspectRevocationArgs;
+/** A target's revocation rows (reason + actors) plus the target digest. */
+export type MemoryRevocationInspection = InspectRevocationResult;
 /** The closed set of grantable scopes. */
 export type MemoryGrantScope = GrantArgs['scope'];
 /** A full memory record, as returned by governed reads. */
@@ -476,5 +517,51 @@ export class AgentMemory {
       throwDenied(result);
     }
     return result;
+  }
+
+  /**
+   * Paginated, tenant-scoped, newest-first view of the audit log. RUNS AS A
+   * QUERY (`ctx.runQuery`) — the first read-only surface on this client, and it
+   * writes no audit row of its own (querying the log is not itself a governed
+   * event). Argument errors (contradictory `filter` window →
+   * `invalid_filter`; `claimedOrgCode` mismatch → `tenant_context_conflict`)
+   * throw typed ConvexErrors directly; there is no returned-denial path here
+   * because a query cannot audit. Walk `continueCursor` until `isDone`.
+   */
+  async auditQuery(
+    ctx: RunQueryCtx,
+    args: MemoryAuditQueryArgs
+  ): Promise<MemoryAuditPage> {
+    return await ctx.runQuery(this.component.audit.query, args);
+  }
+
+  /**
+   * Trace one record's provenance: its immutable creation event and its latest
+   * write event, plus key/subject/orgCode — and DELIBERATELY no content or
+   * metadata, so this surface can never leak a memory body. RUNS AS A QUERY.
+   * Returns null when no record with that id exists IN THIS TENANT (a memoryId
+   * from another tenant is indistinguishable from a missing one).
+   */
+  async provenanceOf(
+    ctx: RunQueryCtx,
+    args: MemoryProvenanceArgs
+  ): Promise<MemoryProvenance | null> {
+    return await ctx.runQuery(this.component.provenance.of, args);
+  }
+
+  /**
+   * The reason-join surface: given a revocation target, return its active and
+   * historical rows (INCLUDING the reason and actor stamps) plus the target
+   * digest — the same digest a `revoked` denial audit row carries, so "why was
+   * this denied?" is answerable without the reason ever entering the audit log.
+   * RUNS AS A QUERY. A cross-tenant `org`/`subject` target throws
+   * `invalid_revocation_target`; a global target is readable from any tenant it
+   * governs.
+   */
+  async inspectRevocation(
+    ctx: RunQueryCtx,
+    args: MemoryInspectRevocationArgs
+  ): Promise<MemoryRevocationInspection> {
+    return await ctx.runQuery(this.component.revocations.inspect, args);
   }
 }
