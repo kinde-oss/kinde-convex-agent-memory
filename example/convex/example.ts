@@ -9,6 +9,7 @@ import type {
   VerifiedCaller,
   VerifyCaller
 } from '@kinde-oss/kinde-convex-agent-memory';
+import {GovernedConvexVector} from './mastraAdapter.js';
 import {v} from 'convex/values';
 
 /**
@@ -504,5 +505,65 @@ export const inspectRevocation = query({
         liftedAt: row.liftedAt
       }))
     };
+  }
+});
+
+/**
+ * MASTRA VECTOR-STORE ADAPTER DRIVERS (P8). Both are ACTIONS: the adapter's
+ * `upsert` runs a governed mutation (`write`) and `query` runs the governed
+ * vector action (`recall`), so an action ctx is required. Each constructs a
+ * GovernedConvexVector BOUND to the (subject, orgCode) passed in — in a real
+ * app that orgCode is the server-verified tenant, never request input. The
+ * adapter routes to the SAME governed client the rest of the example uses, so
+ * isolation, audit, redaction, and revocation are inherited, not re-added.
+ */
+export const mastraUpsert = action({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    id: v.string(),
+    vector: v.array(v.float64()),
+    metadata: v.optional(v.record(v.string(), v.string()))
+  },
+  returns: v.array(v.string()),
+  handler: async (ctx, args) => {
+    const store = new GovernedConvexVector({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode
+    });
+    return await store.upsert({
+      indexName: 'memories',
+      vectors: [args.vector],
+      ids: [args.id],
+      ...(args.metadata === undefined ? {} : {metadata: [args.metadata]})
+    });
+  }
+});
+
+export const mastraQuery = action({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    queryVector: v.array(v.float64()),
+    topK: v.optional(v.number()),
+    filter: v.optional(v.record(v.string(), v.string()))
+  },
+  returns: v.array(v.object({id: v.string(), score: v.float64()})),
+  handler: async (ctx, args) => {
+    const store = new GovernedConvexVector({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode
+    });
+    const results = await store.query({
+      indexName: 'memories',
+      queryVector: args.queryVector,
+      ...(args.topK === undefined ? {} : {topK: args.topK}),
+      ...(args.filter === undefined ? {} : {filter: args.filter})
+    });
+    return results.map((result) => ({id: result.id, score: result.score}));
   }
 });
