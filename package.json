@@ -7,7 +7,6 @@
     "url": "https://github.com/kinde-oss/kinde-convex-agent-memory/issues"
   },
   "version": "0.1.0",
-  "private": true,
   "license": "MIT",
   "keywords": [
     "convex",
