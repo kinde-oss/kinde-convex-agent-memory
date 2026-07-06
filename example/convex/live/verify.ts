@@ -131,15 +131,36 @@ export const runIsolation = internalAction({
     // A's memories: on-topic-ish but NOT the direct answer. B's first memory IS
     // the direct answer to A's query, so B genuinely wins on cosine.
     const aTexts = [
-      {key: `${marker}-a-invoice`, text: `${marker} :: The invoice for March is due on the fifteenth.`},
-      {key: `${marker}-a-deploy`, text: `${marker} :: Deploy the service by running the release pipeline.`},
-      {key: `${marker}-a-onboard`, text: `${marker} :: New team members finish onboarding in their first week.`},
-      {key: `${marker}-a-pwreq`, text: `${marker} :: Password requirements: at least twelve characters with a number.`}
+      {
+        key: `${marker}-a-invoice`,
+        text: `${marker} :: The invoice for March is due on the fifteenth.`
+      },
+      {
+        key: `${marker}-a-deploy`,
+        text: `${marker} :: Deploy the service by running the release pipeline.`
+      },
+      {
+        key: `${marker}-a-onboard`,
+        text: `${marker} :: New team members finish onboarding in their first week.`
+      },
+      {
+        key: `${marker}-a-pwreq`,
+        text: `${marker} :: Password requirements: at least twelve characters with a number.`
+      }
     ];
     const bTexts = [
-      {key: `${marker}-b-answer`, text: `${marker} :: To reset a user password, open Settings, choose Security, then click Reset Password.`},
-      {key: `${marker}-b-board`, text: `${marker} :: The quarterly board meeting is scheduled for Friday afternoon.`},
-      {key: `${marker}-b-holiday`, text: `${marker} :: Our office is closed on national public holidays.`}
+      {
+        key: `${marker}-b-answer`,
+        text: `${marker} :: To reset a user password, open Settings, choose Security, then click Reset Password.`
+      },
+      {
+        key: `${marker}-b-board`,
+        text: `${marker} :: The quarterly board meeting is scheduled for Friday afternoon.`
+      },
+      {
+        key: `${marker}-b-holiday`,
+        text: `${marker} :: Our office is closed on national public holidays.`
+      }
     ];
     const bWinnerKey = `${marker}-b-answer`;
 
@@ -186,11 +207,11 @@ export const runIsolation = internalAction({
       }))
       .sort((x, y) => y.cosineToQuery - x.cosineToQuery);
 
-    console.log(`\n=== LIVE cosine ranking vs query "${QUERY}" (both tenants) ===`);
+    console.log(
+      `\n=== LIVE cosine ranking vs query "${QUERY}" (both tenants) ===`
+    );
     for (const r of ranking) {
-      console.log(
-        `  ${r.cosineToQuery.toFixed(4)}  [${r.tenant}]  ${r.key}`
-      );
+      console.log(`  ${r.cosineToQuery.toFixed(4)}  [${r.tenant}]  ${r.key}`);
     }
 
     const bWinnerCosine =
@@ -234,11 +255,15 @@ export const runIsolation = internalAction({
       score: m.score
     }));
 
-    console.log(`\n=== A recall (org ${ORG_A}) returned ${aMatches.length} rows ===`);
+    console.log(
+      `\n=== A recall (org ${ORG_A}) returned ${aMatches.length} rows ===`
+    );
     for (const m of aMatches) {
       console.log(`  score=${m.score.toFixed(4)}  org=${m.orgCode}  ${m.key}`);
     }
-    console.log(`\n=== B recall (org ${ORG_B}) returned ${bMatches.length} rows ===`);
+    console.log(
+      `\n=== B recall (org ${ORG_B}) returned ${bMatches.length} rows ===`
+    );
     for (const m of bMatches) {
       console.log(`  score=${m.score.toFixed(4)}  org=${m.orgCode}  ${m.key}`);
     }
@@ -247,7 +272,9 @@ export const runIsolation = internalAction({
       aMatches.length > 0 && aMatches.every((m) => m.orgCode === ORG_A);
     const bAllRowsAreOrgB =
       bMatches.length > 0 && bMatches.every((m) => m.orgCode === ORG_B);
-    const bWinnerAbsentFromARecall = !aMatches.some((m) => m.key === bWinnerKey);
+    const bWinnerAbsentFromARecall = !aMatches.some(
+      (m) => m.key === bWinnerKey
+    );
     const bWinnerBeatsAllOfA = bWinnerCosine > aBestCosine;
     const isolationHeld =
       aAllRowsAreOrgA &&
@@ -326,19 +353,33 @@ export const runIsolation = internalAction({
       !auditJson.includes('password') && !auditJson.includes('reset');
 
     console.log(`\n=== keyed-digest check ===`);
-    console.log(`  secret readable in harness (app env): ${secretReadableInHarness}`);
+    console.log(
+      `  secret readable in harness (app env): ${secretReadableInHarness}`
+    );
     console.log(`  written keys: ${writtenKeys.length}`);
     for (const line of perKeyLog) {
       console.log(line);
     }
-    console.log(`  keyed=${writeDigestsMatchingKeyed} unkeyed=${writeDigestsMatchingUnkeyed} neither=${writeDigestsMatchingNeither}`);
+    console.log(
+      `  keyed=${writeDigestsMatchingKeyed} unkeyed=${writeDigestsMatchingUnkeyed} neither=${writeDigestsMatchingNeither}`
+    );
     console.log(`  sample key: ${sampleKey}`);
-    console.log(`  sample keyed digest (secret applied):  ${sampleKeyedDigest}`);
-    console.log(`  sample unkeyed digest (plain SHA-256): ${sampleUnkeyedDigest}`);
-    console.log(`  sample STORED digest in audit:         ${sampleStoredDigest}`);
+    console.log(
+      `  sample keyed digest (secret applied):  ${sampleKeyedDigest}`
+    );
+    console.log(
+      `  sample unkeyed digest (plain SHA-256): ${sampleUnkeyedDigest}`
+    );
+    console.log(
+      `  sample STORED digest in audit:         ${sampleStoredDigest}`
+    );
     console.log(`  all digests well-formed: ${allDigestsWellFormed}`);
-    console.log(`  marker (content/key) absent from audit: ${markerAbsentFromAudit}`);
-    console.log(`  query words absent from audit: ${queryWordsAbsentFromAudit}`);
+    console.log(
+      `  marker (content/key) absent from audit: ${markerAbsentFromAudit}`
+    );
+    console.log(
+      `  query words absent from audit: ${queryWordsAbsentFromAudit}`
+    );
     console.log(
       `\n=== ISOLATION HELD: ${isolationHeld} (bWinnerCosine=${bWinnerCosine.toFixed(4)} > aBest=${aBestCosine.toFixed(4)}; bWinner absent from A: ${bWinnerAbsentFromARecall}) ===\n`
     );

@@ -62,10 +62,19 @@ Install the component into your Convex app's config and mount it:
 ```ts
 // convex/convex.config.ts
 import {defineApp} from 'convex/server';
+import {v} from 'convex/values';
 import memory from '@kinde-oss/kinde-convex-agent-memory/convex.config.js';
 
-const app = defineApp();
-app.use(memory);
+// Declare the signing secret on the app and bind it into the component. Convex
+// isolates component env, so a deployment-wide env var does not reach the
+// component unless you thread it in here (see MEMORY_SIGNING_SECRET below). Omit
+// the env entirely if you are running the unkeyed fallback.
+const app = defineApp({
+  env: {MEMORY_SIGNING_SECRET: v.optional(v.string())}
+});
+app.use(memory, {
+  env: {MEMORY_SIGNING_SECRET: app.env.MEMORY_SIGNING_SECRET}
+});
 export default app;
 ```
 
@@ -86,11 +95,15 @@ export const agentMemory = new AgentMemory(components.memory, {
 });
 ```
 
-`MEMORY_SIGNING_SECRET` is an optional environment variable the component reads to key its audit digests. When it is set, the digests in the audit trail are HMAC-SHA256 keyed by it. When it is not set, they are plain SHA-256. The honest tradeoff: an unkeyed digest of a low-entropy value, such as a short memory key or a subject id, can be enumerated by anyone who can read the audit rows, because they can hash a dictionary of candidates and match. The secret defeats that. Set it out of band, never in code:
+`MEMORY_SIGNING_SECRET` is an optional secret the component reads to key its audit digests. When the component sees it, the digests in the audit trail are HMAC-SHA256 keyed by it. When it does not, they are plain SHA-256. The honest tradeoff: an unkeyed digest of a low-entropy value, such as a short memory key or a subject id, can be enumerated by anyone who can read the audit rows, because they can hash a dictionary of candidates and match. The secret defeats that.
+
+Two steps are required, and the first alone is not enough. Set the value out of band, never in code:
 
 ```bash
 npx convex env set MEMORY_SIGNING_SECRET "$(openssl rand -hex 32)"
 ```
+
+Then bind it into the component at `app.use`, as the wire-up above shows. This second step is required: Convex isolates component env, so `convex env set` alone gives the value to your app's functions but not to the component, and the component silently takes the unkeyed fallback. The binding (`env: {MEMORY_SIGNING_SECRET: app.env.MEMORY_SIGNING_SECRET}`) threads the deployment env var into the component by reference, resolved at runtime, so nothing is hardcoded. With both steps done the component runs keyed; with neither it runs the documented unkeyed fallback.
 
 In every call below, `orgCode` is the server-verified tenant your app resolved from its own auth, not request input. The `subject` is the principal the operation acts for.
 

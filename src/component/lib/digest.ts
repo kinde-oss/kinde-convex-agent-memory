@@ -30,13 +30,23 @@
  */
 
 /**
- * Name of the environment variable holding the HMAC signing secret. Declared
- * on the component in `convex.config.ts` (as `env.MEMORY_SIGNING_SECRET`,
- * optional) and read here via `process.env` — the Convex-generated `env`
- * export is itself just `process.env`, so the two are equivalent, and reading
+ * Name of the environment variable holding the HMAC signing secret. It is
+ * declared as a COMPONENT env var in this component's `convex.config.ts` (`env:
+ * { MEMORY_SIGNING_SECRET }`), and read here from the component's OWN env via
+ * `process.env` — the Convex-generated `env` export is itself just the
+ * component's `process.env`, so the two are equivalent, and reading
  * `process.env` keeps this pure lib file decoupled from generated code and
- * works identically under the vitest edge-runtime. Set out-of-band with
- * `npx convex env set MEMORY_SIGNING_SECRET …`, never hardcoded.
+ * works identically under the vitest edge-runtime.
+ *
+ * REACHING THE COMPONENT (this is the subtle part). Convex isolates component
+ * env: the value in the component's `process.env` is NOT the deployment-wide
+ * env. Running `npx convex env set MEMORY_SIGNING_SECRET …` alone sets a value
+ * app functions can read but the component CANNOT — so the digest would silently
+ * fall back to unkeyed. The host app MUST BIND the secret into the component at
+ * `app.use(memory, { env: { MEMORY_SIGNING_SECRET: app.env.MEMORY_SIGNING_SECRET } })`
+ * (see the example app's `convex.config.ts`). Only then does the value arrive in
+ * the component's `process.env` and keyed mode engage. The secret is never
+ * hardcoded and never leaves this function.
  */
 export const SIGNING_SECRET_ENV_VAR = 'MEMORY_SIGNING_SECRET';
 
