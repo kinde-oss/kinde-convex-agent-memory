@@ -211,3 +211,65 @@ test('a revoked tenant makes both tools DENY — governance is inherited, not re
     'revoked'
   );
 });
+
+test('an empty-string key mints a fresh uuid (no collision), and a non-empty key is respected', async () => {
+  const t = initConvexTest();
+
+  // Two saves with key: '' under the SAME tenant must NOT collide or overwrite:
+  // each blank key mints its own uuid.
+  const first = await t.action(internal.example.vercelSaveMemory, {
+    subject: ALICE,
+    orgCode: ORG_A,
+    key: '',
+    content: 'first empty-key memory',
+    embedding: A_CLOSE
+  });
+  const second = await t.action(internal.example.vercelSaveMemory, {
+    subject: ALICE,
+    orgCode: ORG_A,
+    key: '',
+    content: 'second empty-key memory',
+    embedding: A_CLOSE
+  });
+  expect(first.id).not.toBe('');
+  expect(second.id).not.toBe('');
+  expect(first.id).not.toBe(second.id); // distinct minted keys, no overwrite
+  expect(first.outcome).toBe('created');
+  expect(second.outcome).toBe('created');
+
+  // Both records exist under A (two distinct rows, not one overwritten).
+  const aResults = await t.action(internal.example.vercelSearchMemory, {
+    subject: ALICE,
+    orgCode: ORG_A,
+    embedding: A_CLOSE,
+    topK: 8
+  });
+  expect(aResults.map((r) => r.key).sort()).toEqual(
+    [first.id, second.id].sort()
+  );
+  expect(aResults.map((r) => r.content).sort()).toEqual([
+    'first empty-key memory',
+    'second empty-key memory'
+  ]);
+
+  // The construction-bound tenant still governs: B never sees A's empty-key rows.
+  const bResults = await t.action(internal.example.vercelSearchMemory, {
+    subject: BOB,
+    orgCode: ORG_B,
+    embedding: A_CLOSE,
+    topK: 8
+  });
+  expect(bResults.some((r) => r.key === first.id || r.key === second.id)).toBe(
+    false
+  );
+
+  // A non-empty key is still respected verbatim.
+  const explicit = await t.action(internal.example.vercelSaveMemory, {
+    subject: ALICE,
+    orgCode: ORG_A,
+    key: 'explicit-key',
+    content: 'explicit',
+    embedding: A_CLOSE
+  });
+  expect(explicit.id).toBe('explicit-key');
+});

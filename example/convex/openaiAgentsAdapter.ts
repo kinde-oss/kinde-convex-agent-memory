@@ -186,7 +186,12 @@ export function governedMemoryFunctionTools(
       'Save a memory for later recall. The tenant is fixed by the server; do not pass it.',
     parameters: SAVE_MEMORY_PARAMETERS,
     execute: async (args) => {
-      const key = args.key ?? crypto.randomUUID();
+      // Treat a blank key as missing: a model-supplied `key: ''` must mint a
+      // fresh uuid, not write an empty key that could collide with others.
+      const key =
+        args.key === undefined || args.key === ''
+          ? crypto.randomUUID()
+          : args.key;
       const embedding = args.embedding ?? (await embed(args.content));
       const result = await config.agentMemory.write(config.ctx, {
         subject: config.subject,
