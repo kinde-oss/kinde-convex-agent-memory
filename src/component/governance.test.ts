@@ -1,9 +1,13 @@
 /// <reference types="vite/client" />
 import {beforeEach, describe, expect, test, vi} from 'vitest';
 import {api} from './_generated/api.js';
-import {EMBEDDING_DIMENSIONS} from './lib/embedding.js';
 import {CONTENT_REDACTED} from './lib/redaction.js';
-import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {
+  auditRows,
+  initConvexTest,
+  TEST_SIGNING_SECRET,
+  unitEmbedding
+} from './testHelpers.shared.js';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
 
@@ -21,17 +25,8 @@ const ADMIN = 'user_admin';
 const SECRET = 'TOP-SECRET-CONTENT-a3f8c2';
 const HUSH = 'SENSITIVE-METADATA-9e1b44';
 
-async function auditRows(t: ConvexTest) {
-  return await t.run(async (ctx) => ctx.db.query('audit').collect());
-}
 async function memoryRows(t: ConvexTest) {
   return await t.run(async (ctx) => ctx.db.query('memories').collect());
-}
-
-function unitEmbedding(): number[] {
-  const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
-  vector[0] = 1;
-  return vector;
 }
 
 async function writeAs(t: ConvexTest, subject: string, key: string) {

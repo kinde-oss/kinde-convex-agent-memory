@@ -8,7 +8,7 @@ import {
   digestRedaction,
   digestRevocationTarget
 } from './lib/digest.js';
-import {TEST_SIGNING_SECRET} from './setup.test.js';
+import {TEST_SIGNING_SECRET} from './testHelpers.shared.js';
 
 // This suite drives the signing-secret env var directly, so each test sets the
 // mode it needs. The file-scoped hook keeps the keyed default in place for any

@@ -1,39 +1,23 @@
 /// <reference types="vite/client" />
 import {beforeEach, expect, test, vi} from 'vitest';
-import {ConvexError} from 'convex/values';
-import type {Value} from 'convex/values';
-import {api} from './_generated/api.js';
-import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {internal} from './_generated/api.js';
+import {
+  expectClientError,
+  initConvexTest,
+  TEST_SIGNING_SECRET
+} from './testHelpers.shared.js';
 import {CONTENT_REDACTED} from '@kinde-oss/kinde-convex-agent-memory';
 
 // Hardening: stub the declared signing secret before every test (file-scoped
-// hook; see setup.test.ts).
+// hook; see testHelpers.ts).
 beforeEach(() => {
   vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
 });
 
-async function expectClientError(
-  promise: Promise<unknown>,
-  code: string
-): Promise<void> {
-  let error: unknown;
-  try {
-    await promise;
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error, `expected ConvexError with code "${code}"`).toBeInstanceOf(
-    ConvexError
-  );
-  const raw = (error as ConvexError<Value>).data;
-  const data = typeof raw === 'string' ? (JSON.parse(raw) as unknown) : raw;
-  expect((data as {code: string}).code).toBe(code);
-}
-
 test('grant lifecycle through the client: enforced subject throws typed scope_not_granted', async () => {
   const t = initConvexTest();
   // ALICE starts permissive.
-  await t.mutation(api.example.writeMemory, {
+  await t.mutation(internal.example.writeMemory, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     key: 'k1',
@@ -41,7 +25,7 @@ test('grant lifecycle through the client: enforced subject throws typed scope_no
   });
 
   // First grant (read only) flips ALICE to enforced mode.
-  const granted = await t.mutation(api.example.grantAccess, {
+  const granted = await t.mutation(internal.example.grantAccess, {
     subject: 'user_admin',
     orgCode: 'org_alpha',
     targetSubject: 'user_alice',
@@ -51,7 +35,7 @@ test('grant lifecycle through the client: enforced subject throws typed scope_no
 
   // Writes now throw typed through the client; reads still work.
   await expectClientError(
-    t.mutation(api.example.writeMemory, {
+    t.mutation(internal.example.writeMemory, {
       subject: 'user_alice',
       orgCode: 'org_alpha',
       key: 'k2',
@@ -59,7 +43,7 @@ test('grant lifecycle through the client: enforced subject throws typed scope_no
     }),
     'scope_not_granted'
   );
-  const read = await t.mutation(api.example.getMemory, {
+  const read = await t.mutation(internal.example.getMemory, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     key: 'k1'
@@ -67,14 +51,14 @@ test('grant lifecycle through the client: enforced subject throws typed scope_no
   expect(read?.content).toBe('c');
 
   // Revoking the read grant locks reads out too.
-  await t.mutation(api.example.revokeAccess, {
+  await t.mutation(internal.example.revokeAccess, {
     subject: 'user_admin',
     orgCode: 'org_alpha',
     targetSubject: 'user_alice',
     scope: 'memory.read'
   });
   await expectClientError(
-    t.mutation(api.example.getMemory, {
+    t.mutation(internal.example.getMemory, {
       subject: 'user_alice',
       orgCode: 'org_alpha',
       key: 'k1'
@@ -86,7 +70,7 @@ test('grant lifecycle through the client: enforced subject throws typed scope_no
 test('revoking a nonexistent grant throws typed grant_not_found through the client', async () => {
   const t = initConvexTest();
   await expectClientError(
-    t.mutation(api.example.revokeAccess, {
+    t.mutation(internal.example.revokeAccess, {
       subject: 'user_admin',
       orgCode: 'org_alpha',
       targetSubject: 'user_alice',
@@ -98,20 +82,20 @@ test('revoking a nonexistent grant throws typed grant_not_found through the clie
 
 test('redaction policy set through the client redacts get and recall egress', async () => {
   const t = initConvexTest();
-  await t.mutation(api.example.writeMemoryEmbedded, {
+  await t.mutation(internal.example.writeMemoryEmbedded, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     key: 'facts/sky',
     content: 'the sky is blue'
   });
-  const set = await t.mutation(api.example.setRedactionPolicy, {
+  const set = await t.mutation(internal.example.setRedactionPolicy, {
     subject: 'user_admin',
     orgCode: 'org_alpha',
     fields: ['content']
   });
   expect(set.outcome).toBe('set');
 
-  const read = await t.mutation(api.example.getMemory, {
+  const read = await t.mutation(internal.example.getMemory, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     key: 'facts/sky'
@@ -120,7 +104,7 @@ test('redaction policy set through the client redacts get and recall egress', as
 
   // Recall still MATCHES on the stored embedding (vectors are not policy
   // fields), but the match egresses redacted.
-  const matches = await t.action(api.example.recallMemories, {
+  const matches = await t.action(internal.example.recallMemories, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     query: 'the sky is blue',
@@ -134,7 +118,7 @@ test('redaction policy set through the client redacts get and recall egress', as
 test('malformed redaction fields throw typed invalid_redaction_fields through the client', async () => {
   const t = initConvexTest();
   await expectClientError(
-    t.mutation(api.example.setRedactionPolicy, {
+    t.mutation(internal.example.setRedactionPolicy, {
       subject: 'user_admin',
       orgCode: 'org_alpha',
       fields: ['']
@@ -146,7 +130,7 @@ test('malformed redaction fields throw typed invalid_redaction_fields through th
 test('clearing a nonexistent policy throws typed policy_not_found through the client', async () => {
   const t = initConvexTest();
   await expectClientError(
-    t.mutation(api.example.setRedactionPolicy, {
+    t.mutation(internal.example.setRedactionPolicy, {
       subject: 'user_admin',
       orgCode: 'org_alpha',
       fields: []
@@ -158,7 +142,7 @@ test('clearing a nonexistent policy throws typed policy_not_found through the cl
 test('kill-switch overlay through the client: revoke → throws revoked → lift → works', async () => {
   const t = initConvexTest();
   // ALICE writes freely (permissive).
-  await t.mutation(api.example.writeMemory, {
+  await t.mutation(internal.example.writeMemory, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     key: 'k1',
@@ -166,7 +150,7 @@ test('kill-switch overlay through the client: revoke → throws revoked → lift
   });
 
   // Revoke ALICE at subject level via the overlay.
-  const revoked = await t.mutation(api.example.revokeCaller, {
+  const revoked = await t.mutation(internal.example.revokeCaller, {
     subject: 'user_admin',
     orgCode: 'org_alpha',
     target: {kind: 'subject', orgCode: 'org_alpha', subject: 'user_alice'},
@@ -176,7 +160,7 @@ test('kill-switch overlay through the client: revoke → throws revoked → lift
 
   // The SAME write now throws typed `revoked` through the client.
   await expectClientError(
-    t.mutation(api.example.writeMemory, {
+    t.mutation(internal.example.writeMemory, {
       subject: 'user_alice',
       orgCode: 'org_alpha',
       key: 'k2',
@@ -186,12 +170,12 @@ test('kill-switch overlay through the client: revoke → throws revoked → lift
   );
 
   // Lifting restores access; the write succeeds again.
-  await t.mutation(api.example.liftCaller, {
+  await t.mutation(internal.example.liftCaller, {
     subject: 'user_admin',
     orgCode: 'org_alpha',
     target: {kind: 'subject', orgCode: 'org_alpha', subject: 'user_alice'}
   });
-  const after = await t.mutation(api.example.writeMemory, {
+  const after = await t.mutation(internal.example.writeMemory, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     key: 'k3',
@@ -203,7 +187,7 @@ test('kill-switch overlay through the client: revoke → throws revoked → lift
 test('lifting a non-revoked target throws typed revocation_not_found through the client', async () => {
   const t = initConvexTest();
   await expectClientError(
-    t.mutation(api.example.liftCaller, {
+    t.mutation(internal.example.liftCaller, {
       subject: 'user_admin',
       orgCode: 'org_alpha',
       target: {kind: 'global'}
@@ -215,7 +199,7 @@ test('lifting a non-revoked target throws typed revocation_not_found through the
 test('the three read surfaces work through the client (audit / provenance / reason-join)', async () => {
   const t = initConvexTest();
   // Seed a write, then update it so provenance has distinct create/write stamps.
-  const written = await t.mutation(api.example.writeMemory, {
+  const written = await t.mutation(internal.example.writeMemory, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     key: 'facts/sky',
@@ -223,7 +207,7 @@ test('the three read surfaces work through the client (audit / provenance / reas
   });
 
   // audit.query (runs as a QUERY through the client): newest-first, tenant-scoped.
-  const audit = await t.query(api.example.auditLog, {
+  const audit = await t.query(internal.example.auditLog, {
     orgCode: 'org_alpha',
     subject: 'user_alice',
     numItems: 50,
@@ -234,7 +218,7 @@ test('the three read surfaces work through the client (audit / provenance / reas
   expect(audit.rows[0].operation).toBe('write');
 
   // provenance.of (QUERY): returns provenance, never the body.
-  const prov = await t.query(api.example.memoryProvenance, {
+  const prov = await t.query(internal.example.memoryProvenance, {
     orgCode: 'org_alpha',
     memoryId: written.memoryId
   });
@@ -243,13 +227,13 @@ test('the three read surfaces work through the client (audit / provenance / reas
   expect(JSON.stringify(prov)).not.toContain('the sky is blue');
 
   // Revoke, then inspect (QUERY) the reason join.
-  await t.mutation(api.example.revokeCaller, {
+  await t.mutation(internal.example.revokeCaller, {
     subject: 'user_admin',
     orgCode: 'org_alpha',
     target: {kind: 'subject', orgCode: 'org_alpha', subject: 'user_alice'},
     reason: 'client-visible-reason'
   });
-  const inspection = await t.query(api.example.inspectRevocation, {
+  const inspection = await t.query(internal.example.inspectRevocation, {
     orgCode: 'org_alpha',
     target: {kind: 'subject', orgCode: 'org_alpha', subject: 'user_alice'}
   });
@@ -260,13 +244,13 @@ test('the three read surfaces work through the client (audit / provenance / reas
 
 test('a cross-tenant memoryId returns null provenance through the client', async () => {
   const t = initConvexTest();
-  const written = await t.mutation(api.example.writeMemory, {
+  const written = await t.mutation(internal.example.writeMemory, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     key: 'k',
     content: 'c'
   });
-  const prov = await t.query(api.example.memoryProvenance, {
+  const prov = await t.query(internal.example.memoryProvenance, {
     orgCode: 'org_beta',
     memoryId: written.memoryId
   });

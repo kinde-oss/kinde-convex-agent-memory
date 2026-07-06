@@ -1,4 +1,8 @@
-import {action, mutation, query} from './_generated/server.js';
+import {
+  internalAction,
+  internalMutation,
+  internalQuery
+} from './_generated/server.js';
 import {components} from './_generated/api.js';
 import {
   AgentMemory,
@@ -90,8 +94,19 @@ export const agentMemory = new AgentMemory(components.memory, {
   verifyCaller: fakeVerifyCaller
 });
 
+// DRIVER EXPOSURE. Every driver below is an internalMutation / internalQuery /
+// internalAction, NOT a public one. Each trusts a caller-supplied `subject` and
+// `orgCode` (the reporting drivers take only `orgCode`) with no verified-identity
+// derivation of its own, so exposing them publicly would let a client name any
+// tenant. They model HOST-SIDE calls: in a real app the host resolves the
+// verified tenant (from its auth) and then calls these internally. The ONLY
+// public surface is the HTTP seam in `http.ts`, whose handlers resolve the
+// tenant from a verified bearer token before touching the component. The tests
+// invoke these through `internal.example.*`, which is how convex-test reaches
+// internal functions.
+
 /** Trivial health check proving the example app and mounted component load. */
-export const health = query({
+export const health = internalQuery({
   args: {},
   returns: v.string(),
   handler: async () => 'ok'
@@ -103,7 +118,7 @@ export const health = query({
  * arrived from a client and is passed through so the component can reject a
  * conflict (the app never resolves the conflict itself).
  */
-export const writeMemory = mutation({
+export const writeMemory = internalMutation({
   args: {
     subject: v.string(),
     orgCode: v.string(),
@@ -130,7 +145,7 @@ export const writeMemory = mutation({
  * Governed listing through the client: one page of the tenant's keys,
  * optionally narrowed by a key prefix. Walk `continueCursor` until `isDone`.
  */
-export const listMemories = mutation({
+export const listMemories = internalMutation({
   args: {
     subject: v.string(),
     orgCode: v.string(),
@@ -170,7 +185,7 @@ export const listMemories = mutation({
  * vector is supplied to the component alongside the write — the component
  * itself never embeds.
  */
-export const writeMemoryEmbedded = mutation({
+export const writeMemoryEmbedded = internalMutation({
   args: {
     subject: v.string(),
     orgCode: v.string(),
@@ -200,7 +215,7 @@ export const writeMemoryEmbedded = mutation({
  * injected-embedder path end to end. An ACTION, because the component's
  * recall is one (vector search exists only in actions).
  */
-export const recallMemories = action({
+export const recallMemories = internalAction({
   args: {
     subject: v.string(),
     orgCode: v.string(),
@@ -239,7 +254,7 @@ export const recallMemories = action({
  * Grant a memory scope to a subject through the client. The target's first
  * grant flips it from permissive to enforced mode.
  */
-export const grantAccess = mutation({
+export const grantAccess = internalMutation({
   args: {
     subject: v.string(),
     orgCode: v.string(),
@@ -258,7 +273,7 @@ export const grantAccess = mutation({
 });
 
 /** Revoke a subject's scope grant through the client. */
-export const revokeAccess = mutation({
+export const revokeAccess = internalMutation({
   args: {
     subject: v.string(),
     orgCode: v.string(),
@@ -280,7 +295,7 @@ export const revokeAccess = mutation({
  * Set (or clear, with an empty fields array) the tenant's redaction policy
  * through the client — org-wide, or targeted when targetSubject is given.
  */
-export const setRedactionPolicy = mutation({
+export const setRedactionPolicy = internalMutation({
   args: {
     subject: v.string(),
     orgCode: v.string(),
@@ -307,7 +322,7 @@ const revocationTargetArg = v.object({
  * the revocation is lifted. Distinct from `revokeAccess` above, which revokes a
  * single scope grant.
  */
-export const revokeCaller = mutation({
+export const revokeCaller = internalMutation({
   args: {
     subject: v.string(),
     orgCode: v.string(),
@@ -322,7 +337,7 @@ export const revokeCaller = mutation({
 });
 
 /** Lift an overlay revocation through the client, restoring access. */
-export const liftCaller = mutation({
+export const liftCaller = internalMutation({
   args: {
     subject: v.string(),
     orgCode: v.string(),
@@ -336,7 +351,7 @@ export const liftCaller = mutation({
 });
 
 /** Governed read-by-key through the client (null when absent IN THIS TENANT). */
-export const getMemory = mutation({
+export const getMemory = internalMutation({
   args: {
     subject: v.string(),
     orgCode: v.string(),
@@ -370,7 +385,7 @@ export const getMemory = mutation({
  * READ SURFACE 1 — the paginated audit log through the client. Runs as a QUERY
  * (not a mutation): reading the log writes no audit row.
  */
-export const auditLog = query({
+export const auditLog = internalQuery({
   args: {
     orgCode: v.string(),
     claimedOrgCode: v.optional(v.string()),
@@ -431,7 +446,7 @@ export const auditLog = query({
  * and is re-branded via the client's exported {@link MemoryId} type. Returns no
  * content/metadata by construction.
  */
-export const memoryProvenance = query({
+export const memoryProvenance = internalQuery({
   args: {
     orgCode: v.string(),
     claimedOrgCode: v.optional(v.string()),
@@ -475,7 +490,7 @@ export const memoryProvenance = query({
  * QUERY. Given a target, returns the target digest (matches the `revoked` audit
  * row's digest) and the revocation rows INCLUDING the reason.
  */
-export const inspectRevocation = query({
+export const inspectRevocation = internalQuery({
   args: {
     orgCode: v.string(),
     claimedOrgCode: v.optional(v.string()),
@@ -517,7 +532,7 @@ export const inspectRevocation = query({
  * adapter routes to the SAME governed client the rest of the example uses, so
  * isolation, audit, redaction, and revocation are inherited, not re-added.
  */
-export const mastraUpsert = action({
+export const mastraUpsert = internalAction({
   args: {
     subject: v.string(),
     orgCode: v.string(),
@@ -542,7 +557,7 @@ export const mastraUpsert = action({
   }
 });
 
-export const mastraQuery = action({
+export const mastraQuery = internalAction({
   args: {
     subject: v.string(),
     orgCode: v.string(),

@@ -2,7 +2,12 @@
 import {beforeEach, describe, expect, test, vi} from 'vitest';
 import {api} from './_generated/api.js';
 import {digestKey} from './lib/digest.js';
-import {expectFail, initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {
+  auditRows,
+  expectFail,
+  initConvexTest,
+  TEST_SIGNING_SECRET
+} from './testHelpers.shared.js';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
 
@@ -21,9 +26,6 @@ const SECRET = 'TOP-SECRET-CONTENT-a3f8c2';
 
 async function memoryRows(t: ConvexTest) {
   return await t.run(async (ctx) => ctx.db.query('memories').collect());
-}
-async function auditRows(t: ConvexTest) {
-  return await t.run(async (ctx) => ctx.db.query('audit').collect());
 }
 
 describe('tenant isolation (the invariant)', () => {

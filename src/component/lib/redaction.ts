@@ -78,38 +78,26 @@ export type EgressedRecallMatches = Array<{
   score: number;
 }>;
 
-/** Every redaction policy of the tenant (org-wide and subject-targeted). */
-export async function getPoliciesForOrg(
-  db: Db,
-  orgCode: string
-): Promise<Doc<'redactionPolicies'>[]> {
-  return await db
-    .query('redactionPolicies')
-    .withIndex('by_org', (q) => q.eq('orgCode', orgCode))
-    .collect();
-}
-
 /**
- * Resolve the redaction that applies to one (tenant, subject) read.
- * PRECEDENCE (documented decision): a policy targeting the subject WINS
- * OUTRIGHT over the org-wide policy — no merging; the more specific intent
- * replaces the general one entirely. Returns the fields to redact, or null
- * when no policy applies (egress is then a plain copy).
+ * Resolve the redaction that applies to one (tenant, subject) read, with TWO
+ * targeted point queries on `by_org_target` rather than scanning the tenant's
+ * policies. PRECEDENCE (documented decision): a policy targeting the subject
+ * WINS OUTRIGHT over the org-wide policy — no merging; the more specific intent
+ * replaces the general one entirely, so the subject lookup runs first and short
+ * circuits. Returns the fields to redact, or null when no policy applies (egress
+ * is then a plain copy).
  */
 export async function resolveRedaction(
   db: Db,
   orgCode: string,
   subject: string
 ): Promise<string[] | null> {
-  const policies = await getPoliciesForOrg(db, orgCode);
-  const subjectPolicy = policies.find(
-    (policy) => policy.targetSubject === subject
-  );
-  if (subjectPolicy !== undefined) {
+  const subjectPolicy = await findPolicy(db, orgCode, subject);
+  if (subjectPolicy !== null) {
     return subjectPolicy.fields;
   }
-  const orgPolicy = policies.find((policy) => policy.targetSubject === null);
-  return orgPolicy === undefined ? null : orgPolicy.fields;
+  const orgPolicy = await findPolicy(db, orgCode, null);
+  return orgPolicy === null ? null : orgPolicy.fields;
 }
 
 /**
@@ -151,16 +139,23 @@ export function egressMemories(
   return docs.map((doc) => egressMemory(doc, redactedFields));
 }
 
-/** The tenant's policy for one target (null = the org-wide policy), if any. */
+/**
+ * The tenant's policy for one target (null = the org-wide policy), if any. A
+ * single point query on `by_org_target`; at most one row exists per
+ * (orgCode, targetSubject) — `upsertPolicy` maintains that — so `.unique()` is
+ * exact.
+ */
 export async function findPolicy(
   db: Db,
   orgCode: string,
   targetSubject: string | null
 ): Promise<Doc<'redactionPolicies'> | null> {
-  const policies = await getPoliciesForOrg(db, orgCode);
-  return (
-    policies.find((policy) => policy.targetSubject === targetSubject) ?? null
-  );
+  return await db
+    .query('redactionPolicies')
+    .withIndex('by_org_target', (q) =>
+      q.eq('orgCode', orgCode).eq('targetSubject', targetSubject)
+    )
+    .unique();
 }
 
 export interface UpsertPolicyInput {

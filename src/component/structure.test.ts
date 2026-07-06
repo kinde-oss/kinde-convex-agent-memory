@@ -15,6 +15,31 @@ const sources = import.meta.glob('./**/*.ts', {
   eager: true
 }) as Record<string, string>;
 
+/**
+ * PRODUCTION source modules only. Excluded from every scan below: generated
+ * code; test files (`*.test.ts`), which inspect table state directly via
+ * `t.run` by design; and `testHelpers.shared.ts`, the shared test-scaffolding
+ * module that does the same (its double-dot name also keeps Convex's bundler
+ * from analyzing it — see the note in that file). None is a production access
+ * path.
+ */
+function productionSources(): Array<[string, string]> {
+  return Object.entries(sources).filter(
+    ([path]) =>
+      !path.includes('/_generated/') &&
+      !path.endsWith('.test.ts') &&
+      !path.endsWith('testHelpers.shared.ts')
+  );
+}
+
+/** The production modules whose text matches `pattern`, sorted. */
+function modulesMatching(pattern: RegExp): string[] {
+  return productionSources()
+    .filter(([, source]) => pattern.test(source))
+    .map(([path]) => path)
+    .sort();
+}
+
 // A db-level access of the memories table, in every form the Convex API
 // offers: query, the explicit-table-name id operations (get included — the
 // governed path always uses the table-scoped `db.get('memories', id)`
@@ -26,68 +51,40 @@ const MEMORY_TABLE_ACCESS =
 
 /**
  * THE GOVERNED-ACCESS-PATH CONTRACT (see access.ts): the `memories` table is
- * queried in exactly ONE production module. Excluded from the scan: generated
- * code, and test files — tests inspect table state directly via `t.run` by
- * design, which is test scaffolding, not an access path.
+ * queried in exactly ONE production module.
  */
 test("the 'memories' table is accessed by exactly one module: access.ts", () => {
-  const accessors = Object.entries(sources)
-    .filter(([path]) => !path.includes('/_generated/'))
-    .filter(([path]) => !path.endsWith('.test.ts'))
-    .filter(([, source]) => MEMORY_TABLE_ACCESS.test(source))
-    .map(([path]) => path)
-    .sort();
-  expect(accessors).toEqual(['./access.ts']);
+  expect(modulesMatching(MEMORY_TABLE_ACCESS)).toEqual(['./access.ts']);
 });
 
 test("the 'audit' table is written by exactly one module: lib/audit.ts", () => {
   const AUDIT_TABLE_ACCESS = /\.(?:query|insert)\(\s*['"]audit['"]/;
-  const accessors = Object.entries(sources)
-    .filter(([path]) => !path.includes('/_generated/'))
-    .filter(([path]) => !path.endsWith('.test.ts'))
-    .filter(([, source]) => AUDIT_TABLE_ACCESS.test(source))
-    .map(([path]) => path)
-    .sort();
-  expect(accessors).toEqual(['./lib/audit.ts']);
+  expect(modulesMatching(AUDIT_TABLE_ACCESS)).toEqual(['./lib/audit.ts']);
 });
 
 /** P4: the grant store is pinned exactly like the memories path. */
 test("the 'accessGrants' table is accessed by exactly one module: lib/grantStore.ts", () => {
   const GRANTS_TABLE_ACCESS =
     /\.(?:query|get|insert|patch|replace|delete)\(\s*['"]accessGrants['"]/;
-  const accessors = Object.entries(sources)
-    .filter(([path]) => !path.includes('/_generated/'))
-    .filter(([path]) => !path.endsWith('.test.ts'))
-    .filter(([, source]) => GRANTS_TABLE_ACCESS.test(source))
-    .map(([path]) => path)
-    .sort();
-  expect(accessors).toEqual(['./lib/grantStore.ts']);
+  expect(modulesMatching(GRANTS_TABLE_ACCESS)).toEqual(['./lib/grantStore.ts']);
 });
 
 /** P4: the redaction-policy store is pinned exactly like the memories path. */
 test("the 'redactionPolicies' table is accessed by exactly one module: lib/redaction.ts", () => {
   const POLICIES_TABLE_ACCESS =
     /\.(?:query|get|insert|patch|replace|delete)\(\s*['"]redactionPolicies['"]/;
-  const accessors = Object.entries(sources)
-    .filter(([path]) => !path.includes('/_generated/'))
-    .filter(([path]) => !path.endsWith('.test.ts'))
-    .filter(([, source]) => POLICIES_TABLE_ACCESS.test(source))
-    .map(([path]) => path)
-    .sort();
-  expect(accessors).toEqual(['./lib/redaction.ts']);
+  expect(modulesMatching(POLICIES_TABLE_ACCESS)).toEqual([
+    './lib/redaction.ts'
+  ]);
 });
 
 /** P5: the revocation store is pinned exactly like the memories path. */
 test("the 'revocations' table is accessed by exactly one module: lib/revocationStore.ts", () => {
   const REVOCATIONS_TABLE_ACCESS =
     /\.(?:query|get|insert|patch|replace|delete)\(\s*['"]revocations['"]/;
-  const accessors = Object.entries(sources)
-    .filter(([path]) => !path.includes('/_generated/'))
-    .filter(([path]) => !path.endsWith('.test.ts'))
-    .filter(([, source]) => REVOCATIONS_TABLE_ACCESS.test(source))
-    .map(([path]) => path)
-    .sort();
-  expect(accessors).toEqual(['./lib/revocationStore.ts']);
+  expect(modulesMatching(REVOCATIONS_TABLE_ACCESS)).toEqual([
+    './lib/revocationStore.ts'
+  ]);
 });
 
 /**
@@ -101,13 +98,7 @@ test("the 'revocations' table is accessed by exactly one module: lib/revocationS
  */
 test('the egress brand is minted in exactly one module: lib/redaction.ts', () => {
   const BRAND_MINT = /as\s+EgressedMemoryRecord/;
-  const minters = Object.entries(sources)
-    .filter(([path]) => !path.includes('/_generated/'))
-    .filter(([path]) => !path.endsWith('.test.ts'))
-    .filter(([, source]) => BRAND_MINT.test(source))
-    .map(([path]) => path)
-    .sort();
-  expect(minters).toEqual(['./lib/redaction.ts']);
+  expect(modulesMatching(BRAND_MINT)).toEqual(['./lib/redaction.ts']);
 });
 
 test('every doc-returning read path declares the egressed return type', () => {

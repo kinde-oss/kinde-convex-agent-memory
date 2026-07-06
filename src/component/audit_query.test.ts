@@ -1,7 +1,11 @@
 /// <reference types="vite/client" />
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest';
 import {api} from './_generated/api.js';
-import {expectFail, initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {
+  expectFail,
+  initConvexTest,
+  TEST_SIGNING_SECRET
+} from './testHelpers.shared.js';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
 

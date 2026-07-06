@@ -2,7 +2,11 @@
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest';
 import {api} from './_generated/api.js';
 import {digestFilter} from './lib/digest.js';
-import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {
+  auditRows,
+  initConvexTest,
+  TEST_SIGNING_SECRET
+} from './testHelpers.shared.js';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
 
@@ -34,10 +38,6 @@ async function write(
   });
   if (!result.ok) throw new Error('seed write denied');
   return result.memoryId;
-}
-
-async function auditRows(t: ConvexTest) {
-  return await t.run(async (ctx) => ctx.db.query('audit').collect());
 }
 
 const firstPage = {numItems: 100, cursor: null};

@@ -270,19 +270,30 @@ export async function getMemoriesByIds(
   orgCode: string,
   ids: Id<'memories'>[]
 ): Promise<Map<Id<'memories'>, Doc<'memories'>>> {
+  // Fetch concurrently; the reads are independent point lookups.
+  const fetched = await Promise.all(ids.map((id) => db.get('memories', id)));
   const docs = new Map<Id<'memories'>, Doc<'memories'>>();
-  for (const id of ids) {
-    const doc = await db.get('memories', id);
+  for (let i = 0; i < ids.length; i++) {
+    const doc = fetched[i];
     if (doc === null) {
       continue;
     }
     if (doc.orgCode !== orgCode) {
+      // Log BEFORE failing. The throw below rolls the whole transaction back,
+      // so no audit row can persist to record this; the platform log is the
+      // only durable trace of an invariant that must never fire.
+      console.error('isolation_invariant_violation', {
+        invariant: 'isolation_invariant_violation',
+        memoryId: ids[i],
+        actualOrgCode: doc.orgCode,
+        expectedOrgCode: orgCode
+      });
       fail(
         'isolation_invariant_violation',
         'A vector-search hit resolved to a document outside the tenant partition. This should be impossible; refusing to return any results.'
       );
     }
-    docs.set(id, doc);
+    docs.set(ids[i], doc);
   }
   return docs;
 }

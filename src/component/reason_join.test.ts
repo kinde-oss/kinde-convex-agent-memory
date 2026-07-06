@@ -3,9 +3,12 @@ import {beforeEach, describe, expect, test, vi} from 'vitest';
 import {api} from './_generated/api.js';
 import {digestRevocationTarget} from './lib/digest.js';
 import {EMBEDDING_DIMENSIONS} from './lib/embedding.js';
-import {expectFail, initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
-
-type ConvexTest = ReturnType<typeof initConvexTest>;
+import {
+  auditRows,
+  expectFail,
+  initConvexTest,
+  TEST_SIGNING_SECRET
+} from './testHelpers.shared.js';
 
 beforeEach(() => {
   vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
@@ -15,10 +18,6 @@ const ORG_A = 'org_alpha';
 const ORG_B = 'org_beta';
 const ALICE = 'user_alice';
 const ADMIN = 'user_admin';
-
-async function auditRows(t: ConvexTest) {
-  return await t.run(async (ctx) => ctx.db.query('audit').collect());
-}
 
 describe('the revocation-reason join', () => {
   test('revoked denial omits the reason; inspect returns it; the target digest joins them', async () => {

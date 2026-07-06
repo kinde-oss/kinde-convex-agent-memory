@@ -1,9 +1,11 @@
 /// <reference types="vite/client" />
 import {beforeEach, expect, test, vi} from 'vitest';
-import {ConvexError} from 'convex/values';
-import type {Value} from 'convex/values';
-import {api} from './_generated/api.js';
-import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {internal} from './_generated/api.js';
+import {
+  expectClientError,
+  initConvexTest,
+  TEST_SIGNING_SECRET
+} from './testHelpers.shared.js';
 import {EMBEDDING_DIMENSIONS} from '@kinde-oss/kinde-convex-agent-memory';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
@@ -33,26 +35,8 @@ const A_CLOSE = vec({0: 1, 1: 1}); // cos(·, e0) ≈ 0.707
 const A_FAR = vec({0: 1, 1: 3}); // cos(·, e0) ≈ 0.316
 const B_EXACT = vec({0: 1}); // cos = 1.0 — strictly a better match than any A row
 
-async function expectClientError(
-  promise: Promise<unknown>,
-  code: string
-): Promise<void> {
-  let error: unknown;
-  try {
-    await promise;
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error, `expected ConvexError with code "${code}"`).toBeInstanceOf(
-    ConvexError
-  );
-  const raw = (error as ConvexError<Value>).data;
-  const data = typeof raw === 'string' ? (JSON.parse(raw) as unknown) : raw;
-  expect((data as {code: string}).code).toBe(code);
-}
-
 async function orgAudit(t: ConvexTest, orgCode: string, subject: string) {
-  const result = await t.query(api.example.auditLog, {
+  const result = await t.query(internal.example.auditLog, {
     orgCode,
     subject,
     numItems: 100,
@@ -64,13 +48,13 @@ async function orgAudit(t: ConvexTest, orgCode: string, subject: string) {
 test('isolation through the adapter mirrors the raw API: a foreign better-match never crosses', async () => {
   const t = initConvexTest();
   // A stores a middling match; B stores a STRICTLY better match to A's query.
-  await t.action(api.example.mastraUpsert, {
+  await t.action(internal.example.mastraUpsert, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'a1',
     vector: A_CLOSE
   });
-  await t.action(api.example.mastraUpsert, {
+  await t.action(internal.example.mastraUpsert, {
     subject: BOB,
     orgCode: ORG_B,
     id: 'b1',
@@ -79,7 +63,7 @@ test('isolation through the adapter mirrors the raw API: a foreign better-match 
 
   // A's adapter query returns ONLY A's row — B_EXACT is a better match but is
   // outside A's tenant partition, so the adapter never surfaces it.
-  const aResults = await t.action(api.example.mastraQuery, {
+  const aResults = await t.action(internal.example.mastraQuery, {
     subject: ALICE,
     orgCode: ORG_A,
     queryVector: QUERY,
@@ -88,7 +72,7 @@ test('isolation through the adapter mirrors the raw API: a foreign better-match 
   expect(aResults.map((r) => r.id)).toEqual(['a1']);
 
   // B's adapter, symmetrically, sees only B's row.
-  const bResults = await t.action(api.example.mastraQuery, {
+  const bResults = await t.action(internal.example.mastraQuery, {
     subject: BOB,
     orgCode: ORG_B,
     queryVector: QUERY,
@@ -99,14 +83,14 @@ test('isolation through the adapter mirrors the raw API: a foreign better-match 
 
 test('a Mastra filter NARROWS within the tenant', async () => {
   const t = initConvexTest();
-  await t.action(api.example.mastraUpsert, {
+  await t.action(internal.example.mastraUpsert, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'note1',
     vector: A_CLOSE,
     metadata: {kind: 'note'}
   });
-  await t.action(api.example.mastraUpsert, {
+  await t.action(internal.example.mastraUpsert, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'task1',
@@ -115,7 +99,7 @@ test('a Mastra filter NARROWS within the tenant', async () => {
   });
 
   // No filter: both, best score first.
-  const all = await t.action(api.example.mastraQuery, {
+  const all = await t.action(internal.example.mastraQuery, {
     subject: ALICE,
     orgCode: ORG_A,
     queryVector: QUERY,
@@ -124,7 +108,7 @@ test('a Mastra filter NARROWS within the tenant', async () => {
   expect(all.map((r) => r.id)).toEqual(['note1', 'task1']);
 
   // Filter narrows to the notes only.
-  const notes = await t.action(api.example.mastraQuery, {
+  const notes = await t.action(internal.example.mastraQuery, {
     subject: ALICE,
     orgCode: ORG_A,
     queryVector: QUERY,
@@ -136,13 +120,13 @@ test('a Mastra filter NARROWS within the tenant', async () => {
 
 test('a filter cannot WIDEN: an orgCode in the filter is ignored (tenant is construction-bound)', async () => {
   const t = initConvexTest();
-  await t.action(api.example.mastraUpsert, {
+  await t.action(internal.example.mastraUpsert, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'a1',
     vector: A_CLOSE
   });
-  await t.action(api.example.mastraUpsert, {
+  await t.action(internal.example.mastraUpsert, {
     subject: BOB,
     orgCode: ORG_B,
     id: 'b1',
@@ -151,7 +135,7 @@ test('a filter cannot WIDEN: an orgCode in the filter is ignored (tenant is cons
 
   // A's adapter query with a filter TRYING to reach org_beta: orgCode is not a
   // caller filter — it is dropped, the bound tenant wins, B never crosses.
-  const results = await t.action(api.example.mastraQuery, {
+  const results = await t.action(internal.example.mastraQuery, {
     subject: ALICE,
     orgCode: ORG_A,
     queryVector: QUERY,
@@ -163,13 +147,13 @@ test('a filter cannot WIDEN: an orgCode in the filter is ignored (tenant is cons
 
 test('upsert then query round-trips through the governed path, and BOTH are audited', async () => {
   const t = initConvexTest();
-  await t.action(api.example.mastraUpsert, {
+  await t.action(internal.example.mastraUpsert, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'r1',
     vector: A_CLOSE
   });
-  const results = await t.action(api.example.mastraQuery, {
+  const results = await t.action(internal.example.mastraQuery, {
     subject: ALICE,
     orgCode: ORG_A,
     queryVector: QUERY,
@@ -192,7 +176,7 @@ test('upsert then query round-trips through the governed path, and BOTH are audi
 
 test('a revoked tenant context makes the adapter DENY — governance is inherited, not re-implemented', async () => {
   const t = initConvexTest();
-  await t.action(api.example.mastraUpsert, {
+  await t.action(internal.example.mastraUpsert, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'a1',
@@ -200,7 +184,7 @@ test('a revoked tenant context makes the adapter DENY — governance is inherite
   });
 
   // Revoke ALICE at subject level (the overlay), then query through the adapter.
-  await t.mutation(api.example.revokeCaller, {
+  await t.mutation(internal.example.revokeCaller, {
     subject: ADMIN,
     orgCode: ORG_A,
     target: {kind: 'subject', orgCode: ORG_A, subject: ALICE},
@@ -208,7 +192,7 @@ test('a revoked tenant context makes the adapter DENY — governance is inherite
   });
 
   await expectClientError(
-    t.action(api.example.mastraQuery, {
+    t.action(internal.example.mastraQuery, {
       subject: ALICE,
       orgCode: ORG_A,
       queryVector: QUERY,

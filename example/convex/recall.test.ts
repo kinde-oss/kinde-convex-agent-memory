@@ -2,8 +2,12 @@
 import {beforeEach, expect, test, vi} from 'vitest';
 import {ConvexError} from 'convex/values';
 import type {Value} from 'convex/values';
-import {api, components} from './_generated/api.js';
-import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {components, internal} from './_generated/api.js';
+import {
+  expectClientError,
+  initConvexTest,
+  TEST_SIGNING_SECRET
+} from './testHelpers.shared.js';
 import {
   AgentMemory,
   EMBEDDING_DIMENSIONS
@@ -14,28 +18,10 @@ import type {
 } from '@kinde-oss/kinde-convex-agent-memory';
 
 // Hardening: stub the declared signing secret before every test (file-scoped
-// hook; see setup.test.ts).
+// hook; see testHelpers.ts).
 beforeEach(() => {
   vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
 });
-
-async function expectClientError(
-  promise: Promise<unknown>,
-  code: string
-): Promise<void> {
-  let error: unknown;
-  try {
-    await promise;
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error, `expected ConvexError with code "${code}"`).toBeInstanceOf(
-    ConvexError
-  );
-  const raw = (error as ConvexError<Value>).data;
-  const data = typeof raw === 'string' ? (JSON.parse(raw) as unknown) : raw;
-  expect((data as {code: string}).code).toBe(code);
-}
 
 test('recall by query text through the fake embedder, end to end', async () => {
   const t = initConvexTest();
@@ -43,7 +29,7 @@ test('recall by query text through the fake embedder, end to end', async () => {
     ['facts/sky', 'the sky is blue'],
     ['facts/cats', 'cats purr when content']
   ] as const) {
-    await t.mutation(api.example.writeMemoryEmbedded, {
+    await t.mutation(internal.example.writeMemoryEmbedded, {
       subject: 'user_alice',
       orgCode: 'org_alpha',
       key,
@@ -51,14 +37,14 @@ test('recall by query text through the fake embedder, end to end', async () => {
     });
   }
   // Another tenant holds the EXACT text being queried — it must not surface.
-  await t.mutation(api.example.writeMemoryEmbedded, {
+  await t.mutation(internal.example.writeMemoryEmbedded, {
     subject: 'user_bob',
     orgCode: 'org_beta',
     key: 'facts/sky',
     content: 'the sky is blue'
   });
 
-  const matches = await t.action(api.example.recallMemories, {
+  const matches = await t.action(internal.example.recallMemories, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     query: 'the sky is blue',
@@ -158,7 +144,7 @@ test('supplying both query and embedding, or neither, throws typed invalid_argum
 test('a recall denial surfaces as a typed ConvexError from the client', async () => {
   const t = initConvexTest();
   await expectClientError(
-    t.action(api.example.recallMemories, {
+    t.action(internal.example.recallMemories, {
       subject: 'user_alice',
       orgCode: 'org_alpha',
       claimedOrgCode: 'org_beta',

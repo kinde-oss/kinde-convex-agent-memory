@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest';
 import {api} from './_generated/api.js';
-import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {initConvexTest, TEST_SIGNING_SECRET} from './testHelpers.shared.js';
 
 beforeEach(() => {
   vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);

@@ -59,6 +59,32 @@ function toHex(buffer: ArrayBuffer): string {
 }
 
 /**
+ * Cache of imported HMAC `CryptoKey`s, keyed by the secret VALUE. `importKey`
+ * is comparatively expensive and would otherwise run on every audit write;
+ * the secret changes rarely (never within a deployment), so importing once per
+ * distinct secret is a safe win. The Promise is cached, not the resolved key,
+ * so concurrent first writes share a single import rather than racing. Keying
+ * by the secret value keeps this correct when the secret changes (e.g. tests
+ * toggling keyed vs unkeyed): a different secret is a different cache entry.
+ */
+const hmacKeyCache = new Map<string, Promise<CryptoKey>>();
+
+function hmacKeyForSecret(secret: string): Promise<CryptoKey> {
+  let key = hmacKeyCache.get(secret);
+  if (key === undefined) {
+    key = crypto.subtle.importKey(
+      'raw',
+      textEncoder.encode(secret),
+      {name: 'HMAC', hash: 'SHA-256'},
+      false,
+      ['sign']
+    );
+    hmacKeyCache.set(secret, key);
+  }
+  return key;
+}
+
+/**
  * The one fingerprint primitive: HMAC-SHA256 keyed by the signing secret when
  * present, plain SHA-256 otherwise, truncated to {@link DIGEST_HEX_LENGTH}.
  * Async because `crypto.subtle` is async. The raw input is NEVER returned —
@@ -69,13 +95,7 @@ async function fingerprint(input: string): Promise<string> {
   const secret = process.env[SIGNING_SECRET_ENV_VAR];
   let buffer: ArrayBuffer;
   if (secret !== undefined && secret !== '') {
-    const key = await crypto.subtle.importKey(
-      'raw',
-      textEncoder.encode(secret),
-      {name: 'HMAC', hash: 'SHA-256'},
-      false,
-      ['sign']
-    );
+    const key = await hmacKeyForSecret(secret);
     buffer = await crypto.subtle.sign('HMAC', key, data);
   } else {
     buffer = await crypto.subtle.digest('SHA-256', data);

@@ -801,7 +801,7 @@ async function authenticate(
       )
     };
   }
-  const match = /^Bearer[ ]+(\S+)$/.exec(header);
+  const match = /^Bearer[ ]+(\S+)$/i.exec(header);
   if (match === null) {
     return {
       ok: false,

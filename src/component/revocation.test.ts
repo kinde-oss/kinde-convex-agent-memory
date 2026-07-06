@@ -1,8 +1,12 @@
 /// <reference types="vite/client" />
 import {beforeEach, describe, expect, test, vi} from 'vitest';
 import {api} from './_generated/api.js';
-import {EMBEDDING_DIMENSIONS} from './lib/embedding.js';
-import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {
+  auditRows,
+  initConvexTest,
+  TEST_SIGNING_SECRET,
+  unitEmbedding
+} from './testHelpers.shared.js';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
 
@@ -21,17 +25,8 @@ const ADMIN = 'user_admin';
 // denial message — it must live on the revocation row alone.
 const REASON = 'REASON-SENSITIVE-legal-hold-7c1f44';
 
-async function auditRows(t: ConvexTest) {
-  return await t.run(async (ctx) => ctx.db.query('audit').collect());
-}
 async function revocationRows(t: ConvexTest) {
   return await t.run(async (ctx) => ctx.db.query('revocations').collect());
-}
-
-function unitEmbedding(): number[] {
-  const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0);
-  vector[0] = 1;
-  return vector;
 }
 
 async function write(

@@ -13,10 +13,12 @@
 // mutations and queries the app exposes.
 //
 import {beforeEach, expect, test, vi} from 'vitest';
-import {ConvexError} from 'convex/values';
-import type {Value} from 'convex/values';
-import {api} from './_generated/api.js';
-import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {internal} from './_generated/api.js';
+import {
+  expectClientError,
+  initConvexTest,
+  TEST_SIGNING_SECRET
+} from './testHelpers.shared.js';
 import {fakeEmbed} from './example.js';
 import {CONTENT_REDACTED} from '@kinde-oss/kinde-convex-agent-memory';
 
@@ -70,22 +72,6 @@ async function http(
 }
 
 /** Assert a client-driver call rejects with a typed ConvexError code. */
-async function expectClientError(
-  promise: Promise<unknown>,
-  code: string
-): Promise<void> {
-  let error: unknown;
-  try {
-    await promise;
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error, `expected ConvexError "${code}"`).toBeInstanceOf(ConvexError);
-  const raw = (error as ConvexError<Value>).data;
-  const data = typeof raw === 'string' ? (JSON.parse(raw) as unknown) : raw;
-  expect((data as {code: string}).code).toBe(code);
-}
-
 interface RecallMatch {
   memory: {key: string; orgCode: string; content: string};
   score: number;
@@ -177,7 +163,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
     embedding: fakeEmbed('full customer dossier'),
     metadata: {email: 'vip@example.com', tier: 'gold'}
   });
-  const setPolicy = await t.mutation(api.example.setRedactionPolicy, {
+  const setPolicy = await t.mutation(internal.example.setRedactionPolicy, {
     subject: ADMIN,
     orgCode: ORG_A,
     targetSubject: ALICE,
@@ -201,7 +187,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
   );
 
   // Clear A's policy and read again: the full record returns untouched.
-  await t.mutation(api.example.setRedactionPolicy, {
+  await t.mutation(internal.example.setRedactionPolicy, {
     subject: ADMIN,
     orgCode: ORG_A,
     targetSubject: ALICE,
@@ -221,7 +207,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
   // first; her first grant (read) flips her; a write then denies; granting write
   // restores it. (Alice is untouched: enforcement is per subject.)
   // ---------------------------------------------------------------------------
-  const carolFree = await t.mutation(api.example.writeMemoryEmbedded, {
+  const carolFree = await t.mutation(internal.example.writeMemoryEmbedded, {
     subject: CAROL,
     orgCode: ORG_A,
     key: 'carol/first',
@@ -229,7 +215,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
   });
   expect(carolFree.outcome).toBe('created');
 
-  await t.mutation(api.example.grantAccess, {
+  await t.mutation(internal.example.grantAccess, {
     subject: ADMIN,
     orgCode: ORG_A,
     targetSubject: CAROL,
@@ -238,7 +224,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
 
   // Carol now holds read but not write: a write denies with a typed code.
   await expectClientError(
-    t.mutation(api.example.writeMemoryEmbedded, {
+    t.mutation(internal.example.writeMemoryEmbedded, {
       subject: CAROL,
       orgCode: ORG_A,
       key: 'carol/second',
@@ -247,13 +233,13 @@ test('two tenants, one component: the boundary holds end to end', async () => {
     'scope_not_granted'
   );
 
-  await t.mutation(api.example.grantAccess, {
+  await t.mutation(internal.example.grantAccess, {
     subject: ADMIN,
     orgCode: ORG_A,
     targetSubject: CAROL,
     scope: 'memory.write'
   });
-  const carolAllowed = await t.mutation(api.example.writeMemoryEmbedded, {
+  const carolAllowed = await t.mutation(internal.example.writeMemoryEmbedded, {
     subject: CAROL,
     orgCode: ORG_A,
     key: 'carol/second',
@@ -266,13 +252,13 @@ test('two tenants, one component: the boundary holds end to end', async () => {
   // different actor. The creation stamp is immutable; the write stamp moves.
   // Recorded here, inspected in BEAT 9.
   // ---------------------------------------------------------------------------
-  const provRecord = await t.mutation(api.example.writeMemoryEmbedded, {
+  const provRecord = await t.mutation(internal.example.writeMemoryEmbedded, {
     subject: ALICE,
     orgCode: ORG_A,
     key: 'a/policy-doc',
     content: 'v1 by alice'
   });
-  await t.mutation(api.example.writeMemoryEmbedded, {
+  await t.mutation(internal.example.writeMemoryEmbedded, {
     subject: DEPUTY, // a different actor updates the same record
     orgCode: ORG_A,
     key: 'a/policy-doc',
@@ -294,7 +280,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
     key: 'a/corr-doc',
     correlationId: CORR
   });
-  const correlated = await t.query(api.example.auditLog, {
+  const correlated = await t.query(internal.example.auditLog, {
     orgCode: ORG_A,
     correlationId: CORR,
     numItems: 50,
@@ -318,7 +304,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
   });
   expect(beforeRevoke.status).toBe(200); // works right now
 
-  await t.mutation(api.example.revokeCaller, {
+  await t.mutation(internal.example.revokeCaller, {
     subject: ADMIN,
     orgCode: ORG_A,
     target: {kind: 'subject', orgCode: ORG_A, subject: ALICE},
@@ -342,7 +328,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
   expect(bStillWorks.status).toBe(200);
 
   // Lift it: Alice is back.
-  await t.mutation(api.example.liftCaller, {
+  await t.mutation(internal.example.liftCaller, {
     subject: ADMIN,
     orgCode: ORG_A,
     target: {kind: 'subject', orgCode: ORG_A, subject: ALICE}
@@ -359,7 +345,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
   // reads newest-first and is coherent. And the 'revoked' denial from BEAT 8
   // joins to its reason WITHOUT the reason ever entering the audit row.
   // ---------------------------------------------------------------------------
-  const provenance = await t.query(api.example.memoryProvenance, {
+  const provenance = await t.query(internal.example.memoryProvenance, {
     orgCode: ORG_A,
     memoryId: provRecord.memoryId
   });
@@ -369,7 +355,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
   expect(provenance.writtenBy).toBe(DEPUTY); // latest write moved
   expect(provenance.writtenAt).toBeGreaterThanOrEqual(provenance.createdAt);
 
-  const trail = await t.query(api.example.auditLog, {
+  const trail = await t.query(internal.example.auditLog, {
     orgCode: ORG_A,
     numItems: 200,
     cursor: null
@@ -394,7 +380,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
   );
   expect(revokedRow).toBeDefined();
   if (revokedRow === undefined) throw new Error('unreachable');
-  const inspection = await t.query(api.example.inspectRevocation, {
+  const inspection = await t.query(internal.example.inspectRevocation, {
     orgCode: ORG_A,
     target: {kind: 'subject', orgCode: ORG_A, subject: ALICE}
   });

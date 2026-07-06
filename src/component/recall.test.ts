@@ -3,7 +3,12 @@ import {beforeEach, describe, expect, test, vi} from 'vitest';
 import {api} from './_generated/api.js';
 import {getMemoriesByIds} from './access.js';
 import {EMBEDDING_DIMENSIONS, MAX_RECALL_TOP_K} from './lib/embedding.js';
-import {expectFail, initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {
+  auditRows,
+  expectFail,
+  initConvexTest,
+  TEST_SIGNING_SECRET
+} from './testHelpers.shared.js';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
 
@@ -45,9 +50,6 @@ const B_EXACT = vec({0: 1});
 
 async function memoryRows(t: ConvexTest) {
   return await t.run(async (ctx) => ctx.db.query('memories').collect());
-}
-async function auditRows(t: ConvexTest) {
-  return await t.run(async (ctx) => ctx.db.query('audit').collect());
 }
 
 async function writeEmbedded(

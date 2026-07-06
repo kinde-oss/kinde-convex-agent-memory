@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import {beforeEach, expect, test, vi} from 'vitest';
-import {api} from './_generated/api.js';
-import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {internal} from './_generated/api.js';
+import {initConvexTest, TEST_SIGNING_SECRET} from './testHelpers.shared.js';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
 
@@ -43,7 +43,7 @@ async function call(
 }
 
 async function orgAudit(t: ConvexTest, orgCode: string, subject?: string) {
-  const result = await t.query(api.example.auditLog, {
+  const result = await t.query(internal.example.auditLog, {
     orgCode,
     ...(subject === undefined ? {} : {subject}),
     numItems: 100,
@@ -193,7 +193,7 @@ test('malformed JSON body → 400 request_body_malformed, NOTHING audited', asyn
 test('a governed denial (revoked) over HTTP → 403 with code + correlationId, audited ONCE by the component', async () => {
   const t = initConvexTest();
   const REASON = 'http-revoke-reason-secret';
-  await t.mutation(api.example.revokeCaller, {
+  await t.mutation(internal.example.revokeCaller, {
     subject: 'user_admin',
     orgCode: 'org_alpha',
     target: {kind: 'subject', orgCode: 'org_alpha', subject: 'user_alice'},
@@ -217,7 +217,7 @@ test('a governed denial (revoked) over HTTP → 403 with code + correlationId, a
 test('recall over HTTP via the fake embedder works and stays tenant-partitioned', async () => {
   const t = initConvexTest();
   // Seed an embedded memory in org_alpha (the driver embeds the content).
-  await t.mutation(api.example.writeMemoryEmbedded, {
+  await t.mutation(internal.example.writeMemoryEmbedded, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     key: 'facts/sky',

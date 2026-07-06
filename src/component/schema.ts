@@ -63,14 +63,6 @@ export default defineSchema({
     }),
 
   /**
-   * The audit trail: exactly ONE row per governed operation — reads included,
-   * denials included — written in the same mutation as the operation itself so
-   * they commit or roll back together. `keyOrQueryDigest` is the redacted
-   * digest (see `lib/digest.ts`); raw keys and raw memory content NEVER appear
-   * here. A cross-tenant read audits as a plain `not_found` under the CALLER's
-   * org — no cross-tenant information is recorded.
-   */
-  /**
    * Scope grants — the per-subject enforcement switch. THE MODE BOUNDARY
    * (P4's documented decision): a (orgCode, subject) with NO rows here is
    * PERMISSIVE — the component behaves exactly as P1–P3, fully standalone.
@@ -106,7 +98,9 @@ export default defineSchema({
    * replaces the general one; documented on `resolveRedaction`). `fields`
    * holds metadata field names and/or the literal 'content'. Policies shape
    * the EGRESS COPY only — stored rows are never altered. All access to this
-   * table lives in `lib/redaction.ts` (grep-pinned).
+   * table lives in `lib/redaction.ts` (grep-pinned). The compound
+   * `by_org_target` index resolves a read with two point lookups (the exact
+   * subject, then the org-wide `null` target), never a tenant-wide scan.
    */
   redactionPolicies: defineTable({
     orgCode: v.string(),
@@ -114,7 +108,7 @@ export default defineSchema({
     fields: v.array(v.string()),
     createdBy: v.string(),
     createdAt: v.number()
-  }).index('by_org', ['orgCode']),
+  }).index('by_org_target', ['orgCode', 'targetSubject']),
 
   /**
    * The revocation KILL-SWITCH OVERLAY (P5): checked by every governed
@@ -156,6 +150,14 @@ export default defineSchema({
     liftedAt: v.union(v.number(), v.null())
   }).index('by_kind_org_subject', ['kind', 'orgCode', 'subject']),
 
+  /**
+   * The audit trail: exactly ONE row per governed operation — reads included,
+   * denials included — written in the same mutation as the operation itself so
+   * they commit or roll back together. `keyOrQueryDigest` is the redacted
+   * digest (see `lib/digest.ts`); raw keys and raw memory content NEVER appear
+   * here. A cross-tenant read audits as a plain `not_found` under the CALLER's
+   * org — no cross-tenant information is recorded.
+   */
   audit: defineTable({
     orgCode: v.string(),
     subject: v.string(),

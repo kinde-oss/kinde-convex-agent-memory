@@ -1,9 +1,11 @@
 /// <reference types="vite/client" />
 import {beforeEach, expect, test, vi} from 'vitest';
-import {ConvexError} from 'convex/values';
-import type {Value} from 'convex/values';
-import {api} from './_generated/api.js';
-import {initConvexTest, TEST_SIGNING_SECRET} from './setup.test.js';
+import {internal} from './_generated/api.js';
+import {
+  expectClientError,
+  initConvexTest,
+  TEST_SIGNING_SECRET
+} from './testHelpers.shared.js';
 
 // Hardening: stub the declared signing secret before every test (file-scoped
 // hook; see setup.test.ts).
@@ -13,7 +15,7 @@ beforeEach(() => {
 
 test('write → get roundtrip through the AgentMemory client', async () => {
   const t = initConvexTest();
-  const written = await t.mutation(api.example.writeMemory, {
+  const written = await t.mutation(internal.example.writeMemory, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     key: 'preferences/theme',
@@ -21,7 +23,7 @@ test('write → get roundtrip through the AgentMemory client', async () => {
   });
   expect(written.outcome).toBe('created');
 
-  const read = await t.mutation(api.example.getMemory, {
+  const read = await t.mutation(internal.example.getMemory, {
     subject: 'user_alice',
     orgCode: 'org_alpha',
     key: 'preferences/theme'
@@ -34,7 +36,7 @@ test('write → get roundtrip through the AgentMemory client', async () => {
   });
 
   // Another tenant reading the same key gets null, as if it never existed.
-  const crossTenant = await t.mutation(api.example.getMemory, {
+  const crossTenant = await t.mutation(internal.example.getMemory, {
     subject: 'user_bob',
     orgCode: 'org_beta',
     key: 'preferences/theme'
@@ -45,14 +47,14 @@ test('write → get roundtrip through the AgentMemory client', async () => {
 test('listMemories pages through the tenant via the client', async () => {
   const t = initConvexTest();
   for (const key of ['notes/1', 'notes/2', 'prefs/theme']) {
-    await t.mutation(api.example.writeMemory, {
+    await t.mutation(internal.example.writeMemory, {
       subject: 'user_alice',
       orgCode: 'org_alpha',
       key,
       content: 'c'
     });
   }
-  await t.mutation(api.example.writeMemory, {
+  await t.mutation(internal.example.writeMemory, {
     subject: 'user_bob',
     orgCode: 'org_beta',
     key: 'notes/9',
@@ -60,7 +62,7 @@ test('listMemories pages through the tenant via the client', async () => {
   });
 
   async function fetchPage(pageCursor: string | null) {
-    return await t.mutation(api.example.listMemories, {
+    return await t.mutation(internal.example.listMemories, {
       subject: 'user_alice',
       orgCode: 'org_alpha',
       keyPrefix: 'notes/',
@@ -83,20 +85,14 @@ test('listMemories pages through the tenant via the client', async () => {
 
 test('a tenant context conflict surfaces as a typed ConvexError from the client', async () => {
   const t = initConvexTest();
-  let error: unknown;
-  try {
-    await t.mutation(api.example.writeMemory, {
+  await expectClientError(
+    t.mutation(internal.example.writeMemory, {
       subject: 'user_alice',
       orgCode: 'org_alpha',
       claimedOrgCode: 'org_beta',
       key: 'preferences/theme',
       content: 'dark'
-    });
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error).toBeInstanceOf(ConvexError);
-  const raw = (error as ConvexError<Value>).data;
-  const data = typeof raw === 'string' ? (JSON.parse(raw) as unknown) : raw;
-  expect((data as {code: string}).code).toBe('tenant_context_conflict');
+    }),
+    'tenant_context_conflict'
+  );
 });
