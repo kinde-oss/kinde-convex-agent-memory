@@ -4,21 +4,18 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ## 0.1.0
 
-Initial release of the Kinde agent memory Convex component.
+The first release of the Kinde agent memory Convex component: a tenant-isolated, governed memory layer for AI agents. What it contains:
 
-- **The governed access path** — every read and write of the `memories` table flows through one module (`access.ts`) that applies the server-verified tenant constraint (`orgCode`) at the query, as the leading field of a `by_org_*` index range — never as a post-filter (grep-verified by a structural test).
-- **Governed write** — `memory.write` stores tenant-stamped records with two provenance stamps: an immutable creation event (`createdBy`/`createdAt`, never patched) and a latest-write event (`writtenBy`/`writtenAt`/`mandateId`, re-stamped on every update).
-- **Governed read-by-key** — `memory.get` is constrained by `by_org_key` at the query; a key held by another tenant reads as null exactly as if it did not exist (no cross-tenant existence oracle).
-- **Tenant context conflict** — an optional `claimedOrgCode` (anything that arrived from a client) that differs from the server-verified `orgCode` denies typed `tenant_context_conflict` before any memory access, and the denial is audited.
-- **Tenant-scoped idempotency** — an `idempotencyKey` replays within its tenant (same id, no duplicate, first write wins) and is independent across tenants; reusing one for a different key denies typed `idempotency_key_reused`.
-- **Governed listing with pagination** — `memory.list` pages over the tenant's memories via convex-helpers' `paginator` with a closed, plain-data filter (`bySubject`, `keyPrefix`, `writtenAfter`/`writtenBefore`, `metadataEquals`); the tenant constraint always leads the index range, index-inexpressible filters refine in-memory strictly within that range, and a contradictory filter denies typed `invalid_filter` instead of returning silently empty.
-- **Audit from day one** — exactly one audit row per governed operation (reads, replays, and denials included), carrying a redacted key digest (never raw keys or content) and a correlation id that round-trips when supplied and is minted when absent.
-- **Typed denials that keep their audit row** — component mutations return denials (a throw would roll the audit row back); the `AgentMemory` client converts them into thrown typed `ConvexError`s.
+Governed storage and recall. Agents store memory as structured records with optional vector embeddings and recall it by key, by filter, or by semantic vector search. Every read and write carries a server-verified tenant context (`orgCode`) that is applied at the query as the leading field of the index range, never as a post-filter. Recall runs inside the tenant's partition of the vector index, so a better-matching row in another tenant is outside the searched set rather than filtered out of the results. One module owns all access to the memory table, which a structural test enforces by grep.
 
-Earlier scaffold (P0 — structure only):
+Provenance and idempotency. Each record keeps two provenance stamps: an immutable creation event that is never patched, and a latest-write event that re-stamps on every update. An idempotency key replays within its tenant and is independent across tenants; reusing one for a different key is a typed denial rather than a silent coercion.
 
-- **Component skeleton** — `src/component/` with the component definition (`convex.config.ts`), an empty-but-valid schema, and generated code via Convex codegen.
-- **Client skeleton** — `src/client/` with the `AgentMemory` class and the `MemoryComponentConfig` type: an optional `verifyCaller` slot (matching `@kinde-oss/kinde-convex-agent-auth`'s `verifyCaller` shape), an optional injectable `embedder` slot, and an optional `signingSecretEnvVar`. Types only; the component is fully standalone with none of them set.
-- **Test harness** — `convex-test` + `vitest` wired with a `register(t, name)` export for consumers and a passing smoke test that mounts the component in the example app.
-- **Example app** — a minimal Convex app installing the component via `app.use`; the full reference app arrives in a later phase.
-- **Tooling** — strict TypeScript configs (root, build, test, example), ESLint flat config with the Convex plugin, and Prettier, consistent with the sibling AgentKit repos.
+Access control. Per-subject scope grants gate the memory operations. A subject with no grants is permissive; its first grant flips it to enforced, after which it holds exactly the scopes granted. A revocation overlay sits above grants as a kill switch at the global, org, or subject level: a revoked caller is denied regardless of the scopes it holds, and only lifting the revocation restores access. The revocation reason is stored on the revocation row alone and never enters the audit log.
+
+Redaction on read. A per-tenant policy, optionally targeted at one subject, hides metadata fields or the record body from reads. It shapes the egress copy only and never alters the stored row.
+
+Audit and reporting. Every governed operation writes exactly one audit row, reads and denials included, carrying a keyed digest rather than raw keys or content. Three read-only reporting queries expose the trail without themselves auditing: a paginated tenant-scoped audit query, a provenance lookup that returns identity and provenance stamps but no content, and a revocation inspection that returns the reason for a denial by joining on the revocation target digest that the denial's audit row carries.
+
+The HTTP seam. The client provides HTTP handlers the app mounts on its own router. The tenant comes from a verified bearer token through an app-supplied `verifyCaller`, never from the request body; a body that names another tenant is rejected as a claimed-tenant conflict.
+
+Composition, not coupling. The component imports no auth, billing, or framework package. Auth's `verifyCaller` and an embedding provider are optional slots the app supplies. `MEMORY_SIGNING_SECRET` optionally keys the audit digests. The repository includes an example Convex app with a two-tenant end-to-end narrative and an example-only Mastra vector adapter that routes a Mastra-shaped store through the governed client.
