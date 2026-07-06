@@ -91,6 +91,14 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
   }
 
   const items = data as OpenAIEmbeddingItem[];
+  for (const item of items) {
+    if (!Number.isInteger(item.index)) {
+      throw new ConvexError({
+        code: 'openai_response_malformed',
+        message: 'An embedding item was missing a numeric index.'
+      });
+    }
+  }
   const ordered = [...items].sort((a, b) => a.index - b.index);
   const vectors = ordered.map((item) => item.embedding);
   for (const vector of vectors) {
