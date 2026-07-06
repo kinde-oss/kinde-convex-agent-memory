@@ -202,20 +202,28 @@ test('a revoked tenant context makes the adapter DENY — governance is inherite
   );
 });
 
-// The whole point of the adapter phases: the shipped package (src/) must gain
-// NO framework dependency. Prove it structurally — no `@mastra`, `@langchain`,
-// or `llamaindex` import survives anywhere under src/.
+// The whole point of the adapter phases: the shipped package (src/) must gain NO
+// framework dependency. Prove it structurally — no store framework (`@mastra`,
+// `@langchain`, `llamaindex`) and no agent framework (`@ai-sdk/*`,
+// `@openai/agents`, or a bare `ai` import) survives anywhere under src/.
 const coreSources = import.meta.glob('../../src/**/*.ts', {
   query: '?raw',
   import: 'default',
   eager: true
 }) as Record<string, string>;
 
-test('the core (src/) imports no framework: @mastra, @langchain, llamaindex appear nowhere under src/', () => {
+test('the core (src/) imports no framework: mastra/langchain/llamaindex/ai-sdk/openai-agents appear nowhere under src/', () => {
   expect(Object.keys(coreSources).length).toBeGreaterThan(0); // glob really matched
-  const FRAMEWORK = /@mastra|@langchain|llamaindex/;
+  // Distinctive package substrings that cannot false-positive in src/ code...
+  const FORBIDDEN_SUBSTRING =
+    /@mastra|@langchain|llamaindex|@ai-sdk|@openai\/agents/;
+  // ...plus the bare `ai` package, matched only as an import specifier.
+  const FORBIDDEN_AI_IMPORT = /from\s+['"]ai['"]/;
   const offenders = Object.entries(coreSources)
-    .filter(([, source]) => FRAMEWORK.test(source))
+    .filter(
+      ([, source]) =>
+        FORBIDDEN_SUBSTRING.test(source) || FORBIDDEN_AI_IMPORT.test(source)
+    )
     .map(([path]) => path)
     .sort();
   expect(offenders).toEqual([]);

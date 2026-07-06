@@ -16,6 +16,8 @@ import type {
 import {GovernedConvexVector} from './mastraAdapter.js';
 import {GovernedLangChainVectorStore} from './langchainAdapter.js';
 import {GovernedLlamaIndexVectorStore} from './llamaindexAdapter.js';
+import {governedMemoryTools} from './vercelAdapter.js';
+import {governedMemoryFunctionTools} from './openaiAgentsAdapter.js';
 import {v} from 'convex/values';
 
 /**
@@ -770,5 +772,165 @@ export const llamaindexDelete = internalAction({
     });
     await store.delete(args.refDocId);
     return null;
+  }
+});
+
+/**
+ * VERCEL AI SDK GOVERNED-TOOL DRIVERS (P12). The tools are a pair — saveMemory /
+ * searchMemory — built by a factory that CLOSES the (subject, orgCode) over the
+ * tools; orgCode is NOT a tool parameter. Both drivers are ACTIONS: save runs a
+ * governed mutation (`write`), search runs the governed vector action (`recall`).
+ */
+export const vercelSaveMemory = internalAction({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    key: v.optional(v.string()),
+    content: v.string(),
+    embedding: v.optional(v.array(v.float64()))
+  },
+  returns: v.object({id: v.string(), outcome: v.string()}),
+  handler: async (ctx, args) => {
+    const tools = governedMemoryTools({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode,
+      embedder: async (text) => fakeEmbed(text)
+    });
+    return await tools.saveMemory.execute({
+      ...(args.key === undefined ? {} : {key: args.key}),
+      content: args.content,
+      ...(args.embedding === undefined ? {} : {embedding: args.embedding})
+    });
+  }
+});
+
+export const vercelSearchMemory = internalAction({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    query: v.optional(v.string()),
+    embedding: v.optional(v.array(v.float64())),
+    topK: v.optional(v.number())
+  },
+  returns: v.array(
+    v.object({key: v.string(), content: v.string(), score: v.float64()})
+  ),
+  handler: async (ctx, args) => {
+    const tools = governedMemoryTools({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode,
+      embedder: async (text) => fakeEmbed(text)
+    });
+    return await tools.searchMemory.execute({
+      ...(args.query === undefined ? {} : {query: args.query}),
+      ...(args.embedding === undefined ? {} : {embedding: args.embedding}),
+      ...(args.topK === undefined ? {} : {topK: args.topK})
+    });
+  }
+});
+
+/** Reports the tool INPUT-SCHEMA property names, so a test can prove neither
+ * tool exposes `orgCode`/`subject` (the tenant is not in the surface). */
+export const vercelToolSurface = internalAction({
+  args: {subject: v.string(), orgCode: v.string()},
+  returns: v.object({
+    saveProps: v.array(v.string()),
+    searchProps: v.array(v.string())
+  }),
+  handler: async (ctx, args) => {
+    const tools = governedMemoryTools({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode,
+      embedder: async (text) => fakeEmbed(text)
+    });
+    return {
+      saveProps: Object.keys(tools.saveMemory.inputSchema.properties),
+      searchProps: Object.keys(tools.searchMemory.inputSchema.properties)
+    };
+  }
+});
+
+/**
+ * OPENAI AGENTS SDK GOVERNED-TOOL DRIVERS (P12). The same governed pair in the
+ * function-tool shape (save_memory / search_memory), same construction-bound
+ * tenant not present in the tool surface.
+ */
+export const openaiSaveMemory = internalAction({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    key: v.optional(v.string()),
+    content: v.string(),
+    embedding: v.optional(v.array(v.float64()))
+  },
+  returns: v.object({id: v.string(), outcome: v.string()}),
+  handler: async (ctx, args) => {
+    const tools = governedMemoryFunctionTools({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode,
+      embedder: async (text) => fakeEmbed(text)
+    });
+    return await tools.save_memory.execute({
+      ...(args.key === undefined ? {} : {key: args.key}),
+      content: args.content,
+      ...(args.embedding === undefined ? {} : {embedding: args.embedding})
+    });
+  }
+});
+
+export const openaiSearchMemory = internalAction({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    query: v.optional(v.string()),
+    embedding: v.optional(v.array(v.float64())),
+    topK: v.optional(v.number())
+  },
+  returns: v.array(
+    v.object({key: v.string(), content: v.string(), score: v.float64()})
+  ),
+  handler: async (ctx, args) => {
+    const tools = governedMemoryFunctionTools({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode,
+      embedder: async (text) => fakeEmbed(text)
+    });
+    return await tools.search_memory.execute({
+      ...(args.query === undefined ? {} : {query: args.query}),
+      ...(args.embedding === undefined ? {} : {embedding: args.embedding}),
+      ...(args.topK === undefined ? {} : {topK: args.topK})
+    });
+  }
+});
+
+/** Reports the function-tool PARAMETERS property names (see vercelToolSurface). */
+export const openaiToolSurface = internalAction({
+  args: {subject: v.string(), orgCode: v.string()},
+  returns: v.object({
+    saveProps: v.array(v.string()),
+    searchProps: v.array(v.string())
+  }),
+  handler: async (ctx, args) => {
+    const tools = governedMemoryFunctionTools({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode,
+      embedder: async (text) => fakeEmbed(text)
+    });
+    return {
+      saveProps: Object.keys(tools.save_memory.parameters.properties),
+      searchProps: Object.keys(tools.search_memory.parameters.properties)
+    };
   }
 });
