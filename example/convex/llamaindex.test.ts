@@ -10,7 +10,6 @@ import {EMBEDDING_DIMENSIONS} from '@kinde-oss/kinde-convex-agent-memory';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
 
-// Hardening: stub the declared signing secret before every test.
 beforeEach(() => {
   vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
 });
@@ -48,121 +47,124 @@ async function orgAudit(t: ConvexTest, orgCode: string, subject: string) {
 test('isolation through the adapter mirrors the raw API: a foreign better-match never crosses', async () => {
   const t = initConvexTest();
   // A stores a middling match; B stores a STRICTLY better match to A's query.
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.llamaindexAdd, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'a1',
-    vector: A_CLOSE
+    embedding: A_CLOSE,
+    text: 'a one'
   });
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.llamaindexAdd, {
     subject: BOB,
     orgCode: ORG_B,
     id: 'b1',
-    vector: B_EXACT
+    embedding: B_EXACT,
+    text: 'b one'
   });
 
-  // A's adapter query returns ONLY A's row — B_EXACT is a better match but is
-  // outside A's tenant partition, so the adapter never surfaces it.
-  const aResults = await t.action(internal.example.mastraQuery, {
+  // A's query returns ONLY A's node — B's better match is outside A's tenant
+  // partition, so the adapter never surfaces it.
+  const aResults = await t.action(internal.example.llamaindexQuery, {
     subject: ALICE,
     orgCode: ORG_A,
-    queryVector: QUERY,
-    topK: 8
+    queryEmbedding: QUERY,
+    similarityTopK: 8
   });
   expect(aResults.map((r) => r.id)).toEqual(['a1']);
 
-  // B's adapter, symmetrically, sees only B's row.
-  const bResults = await t.action(internal.example.mastraQuery, {
+  // B's adapter, symmetrically, sees only B's node.
+  const bResults = await t.action(internal.example.llamaindexQuery, {
     subject: BOB,
     orgCode: ORG_B,
-    queryVector: QUERY,
-    topK: 8
+    queryEmbedding: QUERY,
+    similarityTopK: 8
   });
   expect(bResults.map((r) => r.id)).toEqual(['b1']);
 });
 
-test('a Mastra filter NARROWS within the tenant', async () => {
+test('a LlamaIndex filter NARROWS within the tenant', async () => {
   const t = initConvexTest();
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.llamaindexAdd, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'note1',
-    vector: A_CLOSE,
+    embedding: A_CLOSE,
+    text: 'a note',
     metadata: {kind: 'note'}
   });
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.llamaindexAdd, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'task1',
-    vector: A_FAR,
+    embedding: A_FAR,
+    text: 'a task',
     metadata: {kind: 'task'}
   });
 
-  // No filter: both, best score first.
-  const all = await t.action(internal.example.mastraQuery, {
+  const all = await t.action(internal.example.llamaindexQuery, {
     subject: ALICE,
     orgCode: ORG_A,
-    queryVector: QUERY,
-    topK: 8
+    queryEmbedding: QUERY,
+    similarityTopK: 8
   });
   expect(all.map((r) => r.id)).toEqual(['note1', 'task1']);
 
-  // Filter narrows to the notes only.
-  const notes = await t.action(internal.example.mastraQuery, {
+  const notes = await t.action(internal.example.llamaindexQuery, {
     subject: ALICE,
     orgCode: ORG_A,
-    queryVector: QUERY,
-    topK: 8,
+    queryEmbedding: QUERY,
+    similarityTopK: 8,
     filter: {kind: 'note'}
   });
   expect(notes.map((r) => r.id)).toEqual(['note1']);
 });
 
-test('a filter cannot WIDEN: an orgCode in the filter is ignored (tenant is construction-bound)', async () => {
+test('a filter cannot WIDEN: an orgCode filter is ignored (tenant is construction-bound)', async () => {
   const t = initConvexTest();
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.llamaindexAdd, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'a1',
-    vector: A_CLOSE
+    embedding: A_CLOSE,
+    text: 'a'
   });
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.llamaindexAdd, {
     subject: BOB,
     orgCode: ORG_B,
     id: 'b1',
-    vector: B_EXACT
+    embedding: B_EXACT,
+    text: 'b'
   });
 
-  // A's adapter query with a filter TRYING to reach org_beta: orgCode is not a
-  // caller filter — it is dropped, the bound tenant wins, B never crosses.
-  const results = await t.action(internal.example.mastraQuery, {
+  // A filter naming org_beta is dropped; the construction-bound tenant wins.
+  const results = await t.action(internal.example.llamaindexQuery, {
     subject: ALICE,
     orgCode: ORG_A,
-    queryVector: QUERY,
-    topK: 8,
+    queryEmbedding: QUERY,
+    similarityTopK: 8,
     filter: {orgCode: ORG_B}
   });
   expect(results.map((r) => r.id)).toEqual(['a1']);
 });
 
-test('upsert then query round-trips through the governed path, and BOTH are audited', async () => {
+test('add then query round-trips through the governed path, and BOTH are audited', async () => {
   const t = initConvexTest();
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.llamaindexAdd, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'r1',
-    vector: A_CLOSE
+    embedding: A_CLOSE,
+    text: 'roundtrip'
   });
-  const results = await t.action(internal.example.mastraQuery, {
+  const results = await t.action(internal.example.llamaindexQuery, {
     subject: ALICE,
     orgCode: ORG_A,
-    queryVector: QUERY,
-    topK: 8
+    queryEmbedding: QUERY,
+    similarityTopK: 8
   });
   expect(results.map((r) => r.id)).toEqual(['r1']);
+  expect(results[0].text).toBe('roundtrip'); // node text round-trips
 
-  // The write and the recall each landed an audit row — governance came for
-  // free from the governed client, observed here via the audit.query surface.
   const rows = await orgAudit(t, ORG_A, ALICE);
   const writes = rows.filter(
     (row) => row.operation === 'write' && row.reasonCode === 'created'
@@ -176,47 +178,57 @@ test('upsert then query round-trips through the governed path, and BOTH are audi
 
 test('a revoked tenant context makes the adapter DENY — governance is inherited, not re-implemented', async () => {
   const t = initConvexTest();
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.llamaindexAdd, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'a1',
-    vector: A_CLOSE
+    embedding: A_CLOSE,
+    text: 'a'
   });
 
-  // Revoke ALICE at subject level (the overlay), then query through the adapter.
   await t.mutation(internal.example.revokeCaller, {
     subject: ADMIN,
     orgCode: ORG_A,
     target: {kind: 'subject', orgCode: ORG_A, subject: ALICE},
-    reason: 'adapter-revocation-test'
+    reason: 'llamaindex-revocation-test'
   });
 
   await expectClientError(
-    t.action(internal.example.mastraQuery, {
+    t.action(internal.example.llamaindexQuery, {
       subject: ALICE,
       orgCode: ORG_A,
-      queryVector: QUERY,
-      topK: 8
+      queryEmbedding: QUERY,
+      similarityTopK: 8
     }),
     'revoked'
   );
 });
 
-// The whole point of the adapter phases: the shipped package (src/) must gain
-// NO framework dependency. Prove it structurally — no `@mastra`, `@langchain`,
-// or `llamaindex` import survives anywhere under src/.
-const coreSources = import.meta.glob('../../src/**/*.ts', {
-  query: '?raw',
-  import: 'default',
-  eager: true
-}) as Record<string, string>;
+test('delete is honestly not supported: it throws rather than bypass the governed path', async () => {
+  const t = initConvexTest();
+  await t.action(internal.example.llamaindexAdd, {
+    subject: ALICE,
+    orgCode: ORG_A,
+    id: 'a1',
+    embedding: A_CLOSE,
+    text: 'a'
+  });
 
-test('the core (src/) imports no framework: @mastra, @langchain, llamaindex appear nowhere under src/', () => {
-  expect(Object.keys(coreSources).length).toBeGreaterThan(0); // glob really matched
-  const FRAMEWORK = /@mastra|@langchain|llamaindex/;
-  const offenders = Object.entries(coreSources)
-    .filter(([, source]) => FRAMEWORK.test(source))
-    .map(([path]) => path)
-    .sort();
-  expect(offenders).toEqual([]);
+  // The governed client has no delete; the adapter refuses rather than reaching
+  // the table directly. The row is still there afterward.
+  await expect(
+    t.action(internal.example.llamaindexDelete, {
+      subject: ALICE,
+      orgCode: ORG_A,
+      refDocId: 'a1'
+    })
+  ).rejects.toThrow();
+
+  const stillThere = await t.action(internal.example.llamaindexQuery, {
+    subject: ALICE,
+    orgCode: ORG_A,
+    queryEmbedding: QUERY,
+    similarityTopK: 8
+  });
+  expect(stillThere.map((r) => r.id)).toEqual(['a1']);
 });

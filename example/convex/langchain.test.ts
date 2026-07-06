@@ -7,10 +7,10 @@ import {
   TEST_SIGNING_SECRET
 } from './testHelpers.shared.js';
 import {EMBEDDING_DIMENSIONS} from '@kinde-oss/kinde-convex-agent-memory';
+import {fakeEmbed} from './example.js';
 
 type ConvexTest = ReturnType<typeof initConvexTest>;
 
-// Hardening: stub the declared signing secret before every test.
 beforeEach(() => {
   vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
 });
@@ -48,71 +48,75 @@ async function orgAudit(t: ConvexTest, orgCode: string, subject: string) {
 test('isolation through the adapter mirrors the raw API: a foreign better-match never crosses', async () => {
   const t = initConvexTest();
   // A stores a middling match; B stores a STRICTLY better match to A's query.
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.langchainAddVectors, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'a1',
-    vector: A_CLOSE
+    vector: A_CLOSE,
+    pageContent: 'a one'
   });
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.langchainAddVectors, {
     subject: BOB,
     orgCode: ORG_B,
     id: 'b1',
-    vector: B_EXACT
+    vector: B_EXACT,
+    pageContent: 'b one'
   });
 
-  // A's adapter query returns ONLY A's row — B_EXACT is a better match but is
-  // outside A's tenant partition, so the adapter never surfaces it.
-  const aResults = await t.action(internal.example.mastraQuery, {
+  // A's search returns ONLY A's row — B_EXACT is a better match but is outside
+  // A's tenant partition, so the adapter never surfaces it.
+  const aResults = await t.action(internal.example.langchainQuery, {
     subject: ALICE,
     orgCode: ORG_A,
     queryVector: QUERY,
-    topK: 8
+    k: 8
   });
   expect(aResults.map((r) => r.id)).toEqual(['a1']);
 
   // B's adapter, symmetrically, sees only B's row.
-  const bResults = await t.action(internal.example.mastraQuery, {
+  const bResults = await t.action(internal.example.langchainQuery, {
     subject: BOB,
     orgCode: ORG_B,
     queryVector: QUERY,
-    topK: 8
+    k: 8
   });
   expect(bResults.map((r) => r.id)).toEqual(['b1']);
 });
 
-test('a Mastra filter NARROWS within the tenant', async () => {
+test('a LangChain filter NARROWS within the tenant', async () => {
   const t = initConvexTest();
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.langchainAddVectors, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'note1',
     vector: A_CLOSE,
+    pageContent: 'a note',
     metadata: {kind: 'note'}
   });
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.langchainAddVectors, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'task1',
     vector: A_FAR,
+    pageContent: 'a task',
     metadata: {kind: 'task'}
   });
 
   // No filter: both, best score first.
-  const all = await t.action(internal.example.mastraQuery, {
+  const all = await t.action(internal.example.langchainQuery, {
     subject: ALICE,
     orgCode: ORG_A,
     queryVector: QUERY,
-    topK: 8
+    k: 8
   });
   expect(all.map((r) => r.id)).toEqual(['note1', 'task1']);
 
   // Filter narrows to the notes only.
-  const notes = await t.action(internal.example.mastraQuery, {
+  const notes = await t.action(internal.example.langchainQuery, {
     subject: ALICE,
     orgCode: ORG_A,
     queryVector: QUERY,
-    topK: 8,
+    k: 8,
     filter: {kind: 'note'}
   });
   expect(notes.map((r) => r.id)).toEqual(['note1']);
@@ -120,46 +124,50 @@ test('a Mastra filter NARROWS within the tenant', async () => {
 
 test('a filter cannot WIDEN: an orgCode in the filter is ignored (tenant is construction-bound)', async () => {
   const t = initConvexTest();
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.langchainAddVectors, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'a1',
-    vector: A_CLOSE
+    vector: A_CLOSE,
+    pageContent: 'a'
   });
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.langchainAddVectors, {
     subject: BOB,
     orgCode: ORG_B,
     id: 'b1',
-    vector: B_EXACT
+    vector: B_EXACT,
+    pageContent: 'b'
   });
 
-  // A's adapter query with a filter TRYING to reach org_beta: orgCode is not a
-  // caller filter — it is dropped, the bound tenant wins, B never crosses.
-  const results = await t.action(internal.example.mastraQuery, {
+  // A's query with a filter TRYING to reach org_beta: orgCode is not a caller
+  // filter — it is dropped, the bound tenant wins, B never crosses.
+  const results = await t.action(internal.example.langchainQuery, {
     subject: ALICE,
     orgCode: ORG_A,
     queryVector: QUERY,
-    topK: 8,
+    k: 8,
     filter: {orgCode: ORG_B}
   });
   expect(results.map((r) => r.id)).toEqual(['a1']);
 });
 
-test('upsert then query round-trips through the governed path, and BOTH are audited', async () => {
+test('addVectors then query round-trips through the governed path, and BOTH are audited', async () => {
   const t = initConvexTest();
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.langchainAddVectors, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'r1',
-    vector: A_CLOSE
+    vector: A_CLOSE,
+    pageContent: 'roundtrip'
   });
-  const results = await t.action(internal.example.mastraQuery, {
+  const results = await t.action(internal.example.langchainQuery, {
     subject: ALICE,
     orgCode: ORG_A,
     queryVector: QUERY,
-    topK: 8
+    k: 8
   });
   expect(results.map((r) => r.id)).toEqual(['r1']);
+  expect(results[0].pageContent).toBe('roundtrip'); // pageContent round-trips
 
   // The write and the recall each landed an audit row — governance came for
   // free from the governed client, observed here via the audit.query surface.
@@ -174,49 +182,51 @@ test('upsert then query round-trips through the governed path, and BOTH are audi
   expect(recalls.length).toBeGreaterThanOrEqual(1);
 });
 
+test('addDocuments embeds pageContent via the store embeddings and round-trips', async () => {
+  const t = initConvexTest();
+  await t.action(internal.example.langchainAddDocuments, {
+    subject: ALICE,
+    orgCode: ORG_A,
+    id: 'doc1',
+    pageContent: 'the sky is blue'
+  });
+  // The store embedded 'the sky is blue' with the same fake embedder; querying
+  // that exact vector finds it.
+  const results = await t.action(internal.example.langchainQuery, {
+    subject: ALICE,
+    orgCode: ORG_A,
+    queryVector: fakeEmbed('the sky is blue'),
+    k: 8
+  });
+  expect(results.map((r) => r.id)).toEqual(['doc1']);
+  expect(results[0].pageContent).toBe('the sky is blue');
+});
+
 test('a revoked tenant context makes the adapter DENY — governance is inherited, not re-implemented', async () => {
   const t = initConvexTest();
-  await t.action(internal.example.mastraUpsert, {
+  await t.action(internal.example.langchainAddVectors, {
     subject: ALICE,
     orgCode: ORG_A,
     id: 'a1',
-    vector: A_CLOSE
+    vector: A_CLOSE,
+    pageContent: 'a'
   });
 
-  // Revoke ALICE at subject level (the overlay), then query through the adapter.
+  // Revoke ALICE at subject level (the overlay), then search through the adapter.
   await t.mutation(internal.example.revokeCaller, {
     subject: ADMIN,
     orgCode: ORG_A,
     target: {kind: 'subject', orgCode: ORG_A, subject: ALICE},
-    reason: 'adapter-revocation-test'
+    reason: 'langchain-revocation-test'
   });
 
   await expectClientError(
-    t.action(internal.example.mastraQuery, {
+    t.action(internal.example.langchainQuery, {
       subject: ALICE,
       orgCode: ORG_A,
       queryVector: QUERY,
-      topK: 8
+      k: 8
     }),
     'revoked'
   );
-});
-
-// The whole point of the adapter phases: the shipped package (src/) must gain
-// NO framework dependency. Prove it structurally — no `@mastra`, `@langchain`,
-// or `llamaindex` import survives anywhere under src/.
-const coreSources = import.meta.glob('../../src/**/*.ts', {
-  query: '?raw',
-  import: 'default',
-  eager: true
-}) as Record<string, string>;
-
-test('the core (src/) imports no framework: @mastra, @langchain, llamaindex appear nowhere under src/', () => {
-  expect(Object.keys(coreSources).length).toBeGreaterThan(0); // glob really matched
-  const FRAMEWORK = /@mastra|@langchain|llamaindex/;
-  const offenders = Object.entries(coreSources)
-    .filter(([, source]) => FRAMEWORK.test(source))
-    .map(([path]) => path)
-    .sort();
-  expect(offenders).toEqual([]);
 });

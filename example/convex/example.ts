@@ -14,6 +14,8 @@ import type {
   VerifyCaller
 } from '@kinde-oss/kinde-convex-agent-memory';
 import {GovernedConvexVector} from './mastraAdapter.js';
+import {GovernedLangChainVectorStore} from './langchainAdapter.js';
+import {GovernedLlamaIndexVectorStore} from './llamaindexAdapter.js';
 import {v} from 'convex/values';
 
 /**
@@ -580,5 +582,193 @@ export const mastraQuery = internalAction({
       ...(args.filter === undefined ? {} : {filter: args.filter})
     });
     return results.map((result) => ({id: result.id, score: result.score}));
+  }
+});
+
+/**
+ * LANGCHAIN VECTOR-STORE ADAPTER DRIVERS (P11). ACTIONS, like the Mastra ones:
+ * the adapter's add path runs a governed mutation (`write`) and the search path
+ * runs the governed vector action (`recall`). Each constructs a
+ * GovernedLangChainVectorStore BOUND to the (subject, orgCode) passed in — in a
+ * real app that orgCode is the server-verified tenant, never request input.
+ */
+export const langchainAddVectors = internalAction({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    id: v.string(),
+    vector: v.array(v.float64()),
+    pageContent: v.string(),
+    metadata: v.optional(v.record(v.string(), v.string()))
+  },
+  returns: v.array(v.string()),
+  handler: async (ctx, args) => {
+    const store = new GovernedLangChainVectorStore({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode
+    });
+    return await store.addVectors(
+      [args.vector],
+      [
+        {
+          pageContent: args.pageContent,
+          metadata: args.metadata ?? {},
+          id: args.id
+        }
+      ]
+    );
+  }
+});
+
+/** Exercises the addDocuments embed path (embeds pageContent via fakeEmbed). */
+export const langchainAddDocuments = internalAction({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    id: v.string(),
+    pageContent: v.string(),
+    metadata: v.optional(v.record(v.string(), v.string()))
+  },
+  returns: v.array(v.string()),
+  handler: async (ctx, args) => {
+    const store = new GovernedLangChainVectorStore({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode,
+      embeddings: {
+        embedDocuments: async (texts) => texts.map(fakeEmbed),
+        embedQuery: async (text) => fakeEmbed(text)
+      }
+    });
+    return await store.addDocuments([
+      {
+        pageContent: args.pageContent,
+        metadata: args.metadata ?? {},
+        id: args.id
+      }
+    ]);
+  }
+});
+
+export const langchainQuery = internalAction({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    queryVector: v.array(v.float64()),
+    k: v.number(),
+    filter: v.optional(v.record(v.string(), v.string()))
+  },
+  returns: v.array(
+    v.object({id: v.string(), pageContent: v.string(), score: v.float64()})
+  ),
+  handler: async (ctx, args) => {
+    const store = new GovernedLangChainVectorStore({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode
+    });
+    const results = await store.similaritySearchVectorWithScore(
+      args.queryVector,
+      args.k,
+      args.filter
+    );
+    return results.map(([document, score]) => ({
+      id: document.id ?? '',
+      pageContent: document.pageContent,
+      score
+    }));
+  }
+});
+
+/**
+ * LLAMAINDEX VECTOR-STORE ADAPTER DRIVERS (P11). Same construction-bound-tenant,
+ * same governed routing as above. `add` writes governed records; `query` runs
+ * governed recall; `delete` surfaces the honest not-supported limitation.
+ */
+export const llamaindexAdd = internalAction({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    id: v.string(),
+    embedding: v.array(v.float64()),
+    text: v.optional(v.string()),
+    metadata: v.optional(v.record(v.string(), v.string()))
+  },
+  returns: v.array(v.string()),
+  handler: async (ctx, args) => {
+    const store = new GovernedLlamaIndexVectorStore({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode
+    });
+    return await store.add([
+      {
+        id_: args.id,
+        embedding: args.embedding,
+        ...(args.text === undefined ? {} : {text: args.text}),
+        metadata: args.metadata ?? {}
+      }
+    ]);
+  }
+});
+
+export const llamaindexQuery = internalAction({
+  args: {
+    subject: v.string(),
+    orgCode: v.string(),
+    queryEmbedding: v.array(v.float64()),
+    similarityTopK: v.number(),
+    filter: v.optional(v.record(v.string(), v.string()))
+  },
+  returns: v.array(
+    v.object({id: v.string(), text: v.string(), similarity: v.float64()})
+  ),
+  handler: async (ctx, args) => {
+    const store = new GovernedLlamaIndexVectorStore({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode
+    });
+    const filters =
+      args.filter === undefined
+        ? undefined
+        : {
+            filters: Object.entries(args.filter).map(([key, value]) => ({
+              key,
+              value
+            }))
+          };
+    const result = await store.query({
+      queryEmbedding: args.queryEmbedding,
+      similarityTopK: args.similarityTopK,
+      ...(filters === undefined ? {} : {filters})
+    });
+    return result.ids.map((id, index) => ({
+      id,
+      text: result.nodes[index].text ?? '',
+      similarity: result.similarities[index]
+    }));
+  }
+});
+
+/** Drives the adapter's delete, which throws the honest not-supported error. */
+export const llamaindexDelete = internalAction({
+  args: {subject: v.string(), orgCode: v.string(), refDocId: v.string()},
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const store = new GovernedLlamaIndexVectorStore({
+      agentMemory,
+      ctx,
+      subject: args.subject,
+      orgCode: args.orgCode
+    });
+    await store.delete(args.refDocId);
+    return null;
   }
 });
