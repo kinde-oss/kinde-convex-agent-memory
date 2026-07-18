@@ -123,6 +123,8 @@ Read this before exposing any of this component to the network. Its functions ar
 
 8. **Write ownership and provenance redaction.** A `(orgCode, key)` record is owned by the subject that created it. A write by a **different** subject is denied `key_owned_by_other_subject`, never a silent overwrite — grants are per-subject and the record carries its subject as provenance, so a cross-subject overwrite would contradict both. Same-subject re-writes and brand-new keys are unaffected. Separately, `provenanceOf`'s identity strings (`key`, `subject`, and the actor stamps that equal that subject) run through the **same redaction policy egress uses**: with a policy in force for the record's `(org, subject)` they come back redacted, so a sensitive key path or subject id does not leak through the reporting surface; with no policy they are unchanged. `memoryId` and timestamps are always raw.
 
+9. **Alert on `isolation_invariant_violation`.** The vector-search belt-and-braces check logs a structured error and throws if a hit ever resolves outside the tenant partition. The throw rolls back the transaction, including any audit row, so the platform log line is the only durable trace. Wire a production alert on that string: it marks an invariant that must never fire, and firing means investigate immediately.
+
 ### Install and wire up
 
 Install the component into your Convex app's config and mount it:
