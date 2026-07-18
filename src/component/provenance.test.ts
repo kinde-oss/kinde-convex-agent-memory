@@ -13,10 +13,9 @@ afterEach(() => {
 const ORG_A = 'org_alpha';
 const ORG_B = 'org_beta';
 const ALICE = 'user_alice';
-const BOB = 'user_bob';
 
 describe('provenance.of', () => {
-  test('surfaces immutable creation provenance AND the latest write provenance (distinct)', async () => {
+  test('surfaces immutable creation provenance AND the latest write provenance (writtenAt re-stamps)', async () => {
     const t = initConvexTest();
     vi.useFakeTimers();
     vi.setSystemTime(1000);
@@ -28,10 +27,13 @@ describe('provenance.of', () => {
     });
     if (!created.ok) throw new Error('unreachable');
 
-    // A later update by a DIFFERENT subject re-stamps the write provenance.
+    // A later update BY THE OWNING SUBJECT re-stamps the write provenance in
+    // time. A different subject cannot overwrite the key (key ownership; proven
+    // in memory.test.ts), so the writer is always the owner — what moves is
+    // `writtenAt`, not `writtenBy`.
     vi.setSystemTime(2000);
     const updated = await t.mutation(api.memory.write, {
-      subject: BOB,
+      subject: ALICE,
       orgCode: ORG_A,
       key: 'facts/sky',
       content: 'v2'
@@ -49,8 +51,8 @@ describe('provenance.of', () => {
     // Creation event is IMMUTABLE — survived the update untouched.
     expect(prov.createdBy).toBe(ALICE);
     expect(prov.createdAt).toBe(1000);
-    // Latest write event re-stamped, and is DISTINCT from creation.
-    expect(prov.writtenBy).toBe(BOB);
+    // Latest write event re-stamped in time; the owning subject is the writer.
+    expect(prov.writtenBy).toBe(ALICE);
     expect(prov.writtenAt).toBe(2000);
     expect(prov.key).toBe('facts/sky');
     expect(prov.orgCode).toBe(ORG_A);
@@ -70,6 +72,94 @@ describe('provenance.of', () => {
       memoryId: w.memoryId
     });
     expect(prov).toBeNull();
+  });
+
+  test('with a redaction policy on the record subject, the identity strings are redacted; ids and timestamps stay raw', async () => {
+    const t = initConvexTest();
+    vi.useFakeTimers();
+    vi.setSystemTime(5000);
+    const SENSITIVE_KEY = 'clients/acme/merger/secret-path';
+    const w = await t.mutation(api.memory.write, {
+      subject: ALICE,
+      orgCode: ORG_A,
+      key: SENSITIVE_KEY,
+      content: 'body'
+    });
+    if (!w.ok) throw new Error('unreachable');
+    vi.useRealTimers();
+
+    // A subject-targeted policy applies to ALICE (the record's subject).
+    const policy = await t.mutation(api.policy.setRedaction, {
+      subject: ALICE,
+      orgCode: ORG_A,
+      targetSubject: ALICE,
+      fields: ['content']
+    });
+    if (!policy.ok) throw new Error('unreachable');
+
+    const prov = await t.query(api.provenance.of, {
+      orgCode: ORG_A,
+      memoryId: w.memoryId
+    });
+    if (prov === null) throw new Error('unreachable');
+    // Identity strings redacted to the sentinel — the sensitive key never leaves.
+    expect(prov.key).toBe('[redacted]');
+    expect(prov.subject).toBe('[redacted]');
+    expect(prov.createdBy).toBe('[redacted]');
+    expect(prov.writtenBy).toBe('[redacted]');
+    expect(JSON.stringify(prov)).not.toContain(SENSITIVE_KEY);
+    expect(JSON.stringify(prov)).not.toContain(ALICE);
+    // Ids and timestamps are kept raw (durable handle + ordering).
+    expect(prov.memoryId).toBe(w.memoryId);
+    expect(prov.createdAt).toBe(5000);
+    expect(prov.writtenAt).toBe(5000);
+    expect(prov.orgCode).toBe(ORG_A);
+  });
+
+  test('an org-wide redaction policy also redacts provenance identity', async () => {
+    const t = initConvexTest();
+    const w = await t.mutation(api.memory.write, {
+      subject: ALICE,
+      orgCode: ORG_A,
+      key: 'k',
+      content: 'body'
+    });
+    if (!w.ok) throw new Error('unreachable');
+    // Org-wide policy (no targetSubject) — applies to every record in the tenant.
+    await t.mutation(api.policy.setRedaction, {
+      subject: ALICE,
+      orgCode: ORG_A,
+      fields: ['content']
+    });
+    const prov = await t.query(api.provenance.of, {
+      orgCode: ORG_A,
+      memoryId: w.memoryId
+    });
+    if (prov === null) throw new Error('unreachable');
+    expect(prov.subject).toBe('[redacted]');
+    expect(prov.key).toBe('[redacted]');
+  });
+
+  test('with NO redaction policy, provenance identity passes through unchanged', async () => {
+    const t = initConvexTest();
+    const SENSITIVE_KEY = 'clients/acme/secret';
+    const w = await t.mutation(api.memory.write, {
+      subject: ALICE,
+      orgCode: ORG_A,
+      key: SENSITIVE_KEY,
+      content: 'body'
+    });
+    if (!w.ok) throw new Error('unreachable');
+    const prov = await t.query(api.provenance.of, {
+      orgCode: ORG_A,
+      memoryId: w.memoryId
+    });
+    if (prov === null) throw new Error('unreachable');
+    // No policy: raw identity, exactly as before the hardening.
+    expect(prov.key).toBe(SENSITIVE_KEY);
+    expect(prov.subject).toBe(ALICE);
+    expect(prov.createdBy).toBe(ALICE);
+    expect(prov.writtenBy).toBe(ALICE);
   });
 
   test('the returned shape carries NO content, metadata, or embedding', async () => {

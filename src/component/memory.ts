@@ -122,9 +122,12 @@ async function scopeDenial(
  * Governed write. Idempotency (`idempotencyKey`) is tenant-scoped: a replay
  * within the tenant returns the original record's id without writing; the
  * same key in another tenant is a fresh, independent write. Re-writing an
- * existing (orgCode, key) updates content as a NEW write-provenance event —
- * `writtenBy`/`writtenAt` re-stamp, `createdBy`/`createdAt` never change.
- * Exactly one audit row per call, replay and denial included.
+ * existing (orgCode, key) BY ITS OWNING SUBJECT updates content as a NEW
+ * write-provenance event — `writtenBy`/`writtenAt` re-stamp, `createdBy`/
+ * `createdAt` never change. A write to a key OWNED BY ANOTHER SUBJECT is
+ * denied `key_owned_by_other_subject` (see the ownership note in the handler),
+ * never a silent overwrite. Exactly one audit row per call, replay and denial
+ * included.
  *
  * EMBEDDING INTAKE: `embedding` optionally carries the record's semantic
  * vector — exactly `EMBEDDING_DIMENSIONS` finite numbers, validated with a
@@ -265,6 +268,28 @@ export const write = mutation({
     }
 
     const existing = await getMemoryByKey(ctx.db, args.orgCode, args.key);
+
+    // OWNERSHIP: a (orgCode, key) record is owned by the subject that created
+    // it. Grants are per-subject and the record carries its subject as
+    // provenance, so letting a DIFFERENT subject overwrite it — even one
+    // holding memory.write, or writing while permissive — would silently
+    // contradict both the grant model and the provenance stamp. Deny with a
+    // machine-readable code via the return-not-throw path, so the denial's
+    // audit row commits like every other deny. A shared keyspace across
+    // subjects, if ever wanted, would be an explicit opt-in, never this
+    // default. (Same-subject re-writes and brand-new keys are unaffected.)
+    if (existing !== null && existing.subject !== args.subject) {
+      return await deny(
+        ctx.db,
+        'write',
+        args,
+        'key_owned_by_other_subject',
+        'This key is already owned by another subject in this tenant and cannot be overwritten.',
+        keyDigest,
+        correlationId
+      );
+    }
+
     const mandateId = null; // Mandate provenance arrives in a later phase.
     let memoryId;
     let outcome;

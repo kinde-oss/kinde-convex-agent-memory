@@ -134,7 +134,7 @@ describe('tenant context conflict', () => {
 });
 
 describe('provenance', () => {
-  test('creation stamp is immutable; each update is a new write-provenance event', async () => {
+  test('creation stamp is immutable; each same-subject update is a new write-provenance event', async () => {
     const t = initConvexTest();
     const first = await t.mutation(api.memory.write, {
       subject: ALICE,
@@ -151,8 +151,10 @@ describe('provenance', () => {
     expect(created.writtenAt).toBe(created.createdAt);
     expect(created.mandateId).toBeNull();
 
+    // The OWNING subject re-writes: an update (a new write-provenance event).
+    // A different subject cannot — that path is proven below in 'key ownership'.
     const second = await t.mutation(api.memory.write, {
-      subject: BOB,
+      subject: ALICE,
       orgCode: ORG_A,
       key: KEY,
       content: 'v2'
@@ -168,9 +170,96 @@ describe('provenance', () => {
     expect(updated.content).toBe('v2');
     expect(updated.createdBy).toBe(ALICE);
     expect(updated.createdAt).toBe(created.createdAt);
-    // The write stamp is the NEW event.
-    expect(updated.writtenBy).toBe(BOB);
+    // The write stamp re-stamps (writtenAt moves forward in time); the writer
+    // is always the owning subject, so writtenBy stays ALICE.
+    expect(updated.writtenBy).toBe(ALICE);
     expect(updated.writtenAt).toBeGreaterThanOrEqual(created.createdAt);
+  });
+});
+
+describe('key ownership (cross-subject overwrite is denied)', () => {
+  test('a subject may re-write its OWN key (same-subject upsert unchanged)', async () => {
+    const t = initConvexTest();
+    const first = await t.mutation(api.memory.write, {
+      subject: ALICE,
+      orgCode: ORG_A,
+      key: KEY,
+      content: 'v1'
+    });
+    if (!first.ok) throw new Error('unreachable');
+    expect(first.outcome).toBe('created');
+
+    const second = await t.mutation(api.memory.write, {
+      subject: ALICE,
+      orgCode: ORG_A,
+      key: KEY,
+      content: 'v2'
+    });
+    if (!second.ok) throw new Error('unreachable');
+    expect(second.outcome).toBe('updated');
+    const [row] = await memoryRows(t);
+    expect(row.content).toBe('v2');
+  });
+
+  test('a DIFFERENT subject is denied key_owned_by_other_subject, the row is untouched, and exactly one audit row is written', async () => {
+    const t = initConvexTest();
+    const created = await t.mutation(api.memory.write, {
+      subject: ALICE,
+      orgCode: ORG_A,
+      key: KEY,
+      content: SECRET
+    });
+    if (!created.ok) throw new Error('unreachable');
+    const auditAfterCreate = (await auditRows(t)).length;
+
+    // BOB (same tenant) tries to overwrite ALICE's key.
+    const denied = await t.mutation(api.memory.write, {
+      subject: BOB,
+      orgCode: ORG_A,
+      key: KEY,
+      content: 'bob-overwrite-attempt'
+    });
+    expect(denied.ok).toBe(false);
+    if (denied.ok) throw new Error('unreachable');
+    expect(denied.code).toBe('key_owned_by_other_subject');
+
+    // The stored row is byte-for-byte intact: still ALICE's, still the secret.
+    const rows = await memoryRows(t);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].subject).toBe(ALICE);
+    expect(rows[0].content).toBe(SECRET);
+
+    // Exactly one NEW audit row (the denial), carrying no raw content.
+    const audit = await auditRows(t);
+    expect(audit.length - auditAfterCreate).toBe(1);
+    const denialRow = audit[audit.length - 1];
+    expect(denialRow.operation).toBe('write');
+    expect(denialRow.decision).toBe('denied');
+    expect(denialRow.reasonCode).toBe('key_owned_by_other_subject');
+    expect(denialRow.subject).toBe(BOB);
+    expect(JSON.stringify(denialRow)).not.toContain(SECRET);
+  });
+
+  test('the same key held by a DIFFERENT tenant is a fresh, independent write (ownership is tenant-scoped)', async () => {
+    const t = initConvexTest();
+    await t.mutation(api.memory.write, {
+      subject: ALICE,
+      orgCode: ORG_A,
+      key: KEY,
+      content: 'a-owns-this'
+    });
+    // BOB in ORG_B writes the same key: a brand-new key in his tenant, created.
+    const bWrite = await t.mutation(api.memory.write, {
+      subject: BOB,
+      orgCode: ORG_B,
+      key: KEY,
+      content: 'b-owns-this'
+    });
+    if (!bWrite.ok) throw new Error('unreachable');
+    expect(bWrite.outcome).toBe('created');
+    expect((await memoryRows(t)).filter((r) => r.orgCode === ORG_B)).toHaveLength(
+      1
+    );
   });
 });
 

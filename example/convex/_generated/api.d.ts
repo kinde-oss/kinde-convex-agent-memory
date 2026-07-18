@@ -11,6 +11,7 @@
 import type * as example from "../example.js";
 import type * as http from "../http.js";
 import type * as langchainAdapter from "../langchainAdapter.js";
+import type * as live_matrix from "../live/matrix.js";
 import type * as live_openaiEmbedder from "../live/openaiEmbedder.js";
 import type * as live_verify from "../live/verify.js";
 import type * as llamaindexAdapter from "../llamaindexAdapter.js";
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   example: typeof example;
   http: typeof http;
   langchainAdapter: typeof langchainAdapter;
+  "live/matrix": typeof live_matrix;
   "live/openaiEmbedder": typeof live_openaiEmbedder;
   "live/verify": typeof live_verify;
   llamaindexAdapter: typeof llamaindexAdapter;

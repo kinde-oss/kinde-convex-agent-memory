@@ -248,9 +248,11 @@ test('two tenants, one component: the boundary holds end to end', async () => {
   expect(carolAllowed.outcome).toBe('created');
 
   // ---------------------------------------------------------------------------
-  // BEAT 6 — A record for provenance: created by Alice, later updated by a
-  // different actor. The creation stamp is immutable; the write stamp moves.
-  // Recorded here, inspected in BEAT 9.
+  // BEAT 6 — Provenance and key ownership. Alice creates a record and later
+  // updates it HERSELF: the creation stamp is immutable while the write stamp
+  // re-stamps in time. A key is owned by the subject that created it, so a
+  // DIFFERENT actor cannot overwrite it — the deputy's attempt is denied, not
+  // silently applied. Ownership is part of the boundary too. Inspected in BEAT 9.
   // ---------------------------------------------------------------------------
   const provRecord = await t.mutation(internal.example.writeMemoryEmbedded, {
     subject: ALICE,
@@ -259,11 +261,21 @@ test('two tenants, one component: the boundary holds end to end', async () => {
     content: 'v1 by alice'
   });
   await t.mutation(internal.example.writeMemoryEmbedded, {
-    subject: DEPUTY, // a different actor updates the same record
+    subject: ALICE, // the owning subject re-writes: an update, writtenAt moves
     orgCode: ORG_A,
     key: 'a/policy-doc',
-    content: 'v2 by deputy'
+    content: 'v2 by alice'
   });
+  // The deputy owns none of Alice's keys: an overwrite is refused, not applied.
+  await expectClientError(
+    t.mutation(internal.example.writeMemoryEmbedded, {
+      subject: DEPUTY,
+      orgCode: ORG_A,
+      key: 'a/policy-doc',
+      content: 'v3 by deputy'
+    }),
+    'key_owned_by_other_subject'
+  );
 
   // ---------------------------------------------------------------------------
   // BEAT 7 — Correlation. A request id threaded through related calls stitches
@@ -352,7 +364,7 @@ test('two tenants, one component: the boundary holds end to end', async () => {
   expect(provenance).not.toBeNull();
   if (provenance === null) throw new Error('unreachable');
   expect(provenance.createdBy).toBe(ALICE); // creation is immutable
-  expect(provenance.writtenBy).toBe(DEPUTY); // latest write moved
+  expect(provenance.writtenBy).toBe(ALICE); // the owning subject wrote both versions
   expect(provenance.writtenAt).toBeGreaterThanOrEqual(provenance.createdAt);
 
   const trail = await t.query(internal.example.auditLog, {

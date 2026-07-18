@@ -88,6 +88,7 @@ export type WriteOutcome = Infer<typeof writeOutcomeValidator>;
 export const deniedCodeValidator = v.union(
   v.literal('tenant_context_conflict'),
   v.literal('idempotency_key_reused'),
+  v.literal('key_owned_by_other_subject'),
   v.literal('invalid_filter'),
   v.literal('invalid_embedding'),
   v.literal('invalid_topk'),
@@ -133,6 +134,7 @@ export const auditReasonValidator = v.union(
   v.literal('redaction_cleared'),
   v.literal('tenant_context_conflict'),
   v.literal('idempotency_key_reused'),
+  v.literal('key_owned_by_other_subject'),
   v.literal('invalid_filter'),
   v.literal('invalid_embedding'),
   v.literal('invalid_topk'),
@@ -401,11 +403,15 @@ export type AuditQueryResult = Infer<typeof auditQueryResultValidator>;
 /**
  * The PROVENANCE shape returned by `provenance.of`. DELIBERATELY CARRIES NO
  * CONTENT: no `content`, no `metadata`, no `embedding` — only identity and
- * provenance stamps. Because it can hold no memory body, this surface can
- * never leak one even absent a redaction policy, so it needs no egress
- * redaction. `createdBy`/`createdAt` are the IMMUTABLE creation event;
- * `writtenBy`/`writtenAt`/`mandateId` are the LATEST write event (they
- * re-stamp on every update while the creation stamp never moves).
+ * provenance stamps, so it can never leak a memory body. The identity STRINGS
+ * it does carry (`key`, `subject`, `createdBy`, `writtenBy`) ARE run through
+ * redaction-on-read when a policy applies to the record's (org, subject) — see
+ * `redactProvenanceIdentity` and the provenance module doc — because a key can
+ * encode a sensitive path and subject identity is otherwise kept only as a
+ * keyed audit digest. `memoryId`/timestamps stay raw. `createdBy`/`createdAt`
+ * are the IMMUTABLE creation event; `writtenBy`/`writtenAt`/`mandateId` are the
+ * LATEST write event (they re-stamp on every update while the creation stamp
+ * never moves).
  */
 export const provenanceRecordValidator = v.object({
   memoryId: v.id('memories'),

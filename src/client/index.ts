@@ -251,12 +251,6 @@ export interface MemoryComponentConfig {
   verifyCaller?: VerifyCaller;
   /** See {@link Embedder}. Enables semantic (vector) recall when present. */
   embedder?: Embedder;
-  /**
-   * Name of the env var the component reads its HMAC signing secret from,
-   * for apps that mount the component under a different secret var. The value
-   * itself is always set via `npx convex env set`, never hardcoded.
-   */
-  signingSecretEnvVar?: string;
 }
 
 /**
@@ -312,8 +306,8 @@ export class AgentMemory {
    * Governed write. Returns the record id, how the write resolved
    * (`created` | `updated` | `idempotent_replay`), and the correlation id.
    * Throws a typed ConvexError (`tenant_context_conflict`,
-   * `idempotency_key_reused`) on a governed denial — the denial is already
-   * audited by the component before this throws.
+   * `idempotency_key_reused`, `key_owned_by_other_subject`) on a governed
+   * denial — the denial is already audited by the component before this throws.
    */
   async write(
     ctx: RunMutationCtx,
@@ -744,6 +738,7 @@ function statusForCode(code: string): number {
   switch (code) {
     case 'tenant_context_conflict':
     case 'scope_not_granted':
+    case 'key_owned_by_other_subject':
     case 'revoked':
       return 403;
     case 'embedder_not_configured':

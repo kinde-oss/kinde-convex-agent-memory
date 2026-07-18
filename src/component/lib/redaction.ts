@@ -140,6 +140,48 @@ export function egressMemories(
 }
 
 /**
+ * The identity fields of a PROVENANCE result — the strings that name a record
+ * and its owner, as opposed to its ids and timestamps.
+ */
+export interface ProvenanceIdentity {
+  key: string;
+  subject: string;
+  createdBy: string;
+  writtenBy: string;
+}
+
+/**
+ * Redact a PROVENANCE result's identity fields through THE SAME policy egress
+ * uses. The provenance surface structurally carries no content or metadata (it
+ * cannot leak a memory body), but its `key` may encode a sensitive path, and
+ * its subject identity is exactly what the audit trail keeps only as a keyed
+ * digest, never raw. So provenance runs through this seam: when ANY redaction
+ * policy applies to the record's (org, subject) — resolved by the very
+ * `resolveRedaction` egress calls — the identity strings are replaced with the
+ * fixed {@link CONTENT_REDACTED} sentinel; when no policy applies (`redacted`
+ * is null), they pass through unchanged. Ids and timestamps stay raw (the
+ * caller keeps a durable handle and ordering). `createdBy`/`writtenBy` are
+ * redacted ALONGSIDE `subject`: after cross-subject writes are denied they
+ * equal the owning subject, so redacting `subject` while returning them raw
+ * would be a hollow control.
+ */
+export function redactProvenanceIdentity<T extends ProvenanceIdentity>(
+  record: T,
+  redacted: string[] | null
+): T {
+  if (redacted === null || redacted.length === 0) {
+    return record;
+  }
+  return {
+    ...record,
+    key: CONTENT_REDACTED,
+    subject: CONTENT_REDACTED,
+    createdBy: CONTENT_REDACTED,
+    writtenBy: CONTENT_REDACTED
+  };
+}
+
+/**
  * The tenant's policy for one target (null = the org-wide policy), if any. A
  * single point query on `by_org_target`; at most one row exists per
  * (orgCode, targetSubject) — `upsertPolicy` maintains that — so `.unique()` is

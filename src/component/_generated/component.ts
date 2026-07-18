@@ -92,6 +92,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               | "redaction_cleared"
               | "tenant_context_conflict"
               | "idempotency_key_reused"
+              | "key_owned_by_other_subject"
               | "invalid_filter"
               | "invalid_embedding"
               | "invalid_topk"
@@ -133,6 +134,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | "tenant_context_conflict"
               | "idempotency_key_reused"
+              | "key_owned_by_other_subject"
               | "invalid_filter"
               | "invalid_embedding"
               | "invalid_topk"
@@ -165,6 +167,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | "tenant_context_conflict"
               | "idempotency_key_reused"
+              | "key_owned_by_other_subject"
               | "invalid_filter"
               | "invalid_embedding"
               | "invalid_topk"
@@ -224,6 +227,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | "tenant_context_conflict"
               | "idempotency_key_reused"
+              | "key_owned_by_other_subject"
               | "invalid_filter"
               | "invalid_embedding"
               | "invalid_topk"
@@ -300,6 +304,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | "tenant_context_conflict"
               | "idempotency_key_reused"
+              | "key_owned_by_other_subject"
               | "invalid_filter"
               | "invalid_embedding"
               | "invalid_topk"
@@ -361,6 +366,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | "tenant_context_conflict"
               | "idempotency_key_reused"
+              | "key_owned_by_other_subject"
               | "invalid_filter"
               | "invalid_embedding"
               | "invalid_topk"
@@ -408,6 +414,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | "tenant_context_conflict"
               | "idempotency_key_reused"
+              | "key_owned_by_other_subject"
               | "invalid_filter"
               | "invalid_embedding"
               | "invalid_topk"
@@ -442,6 +449,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | "tenant_context_conflict"
               | "idempotency_key_reused"
+              | "key_owned_by_other_subject"
               | "invalid_filter"
               | "invalid_embedding"
               | "invalid_topk"
@@ -532,6 +540,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | "tenant_context_conflict"
               | "idempotency_key_reused"
+              | "key_owned_by_other_subject"
               | "invalid_filter"
               | "invalid_embedding"
               | "invalid_topk"
@@ -573,6 +582,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             code:
               | "tenant_context_conflict"
               | "idempotency_key_reused"
+              | "key_owned_by_other_subject"
               | "invalid_filter"
               | "invalid_embedding"
               | "invalid_topk"
