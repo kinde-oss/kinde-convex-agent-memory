@@ -1,0 +1,98 @@
+/// <reference types="vite/client" />
+import {beforeEach, expect, test, vi} from 'vitest';
+import {internal} from './_generated/api.js';
+import {
+  expectClientError,
+  initConvexTest,
+  TEST_SIGNING_SECRET
+} from './testHelpers.shared.js';
+
+// Hardening: stub the declared signing secret before every test (file-scoped
+// hook; see setup.test.ts).
+beforeEach(() => {
+  vi.stubEnv('MEMORY_SIGNING_SECRET', TEST_SIGNING_SECRET);
+});
+
+test('write → get roundtrip through the AgentMemory client', async () => {
+  const t = initConvexTest();
+  const written = await t.mutation(internal.example.writeMemory, {
+    subject: 'user_alice',
+    orgCode: 'org_alpha',
+    key: 'preferences/theme',
+    content: 'dark'
+  });
+  expect(written.outcome).toBe('created');
+
+  const read = await t.mutation(internal.example.getMemory, {
+    subject: 'user_alice',
+    orgCode: 'org_alpha',
+    key: 'preferences/theme'
+  });
+  expect(read).toEqual({
+    key: 'preferences/theme',
+    content: 'dark',
+    createdBy: 'user_alice',
+    writtenBy: 'user_alice'
+  });
+
+  // Another tenant reading the same key gets null, as if it never existed.
+  const crossTenant = await t.mutation(internal.example.getMemory, {
+    subject: 'user_bob',
+    orgCode: 'org_beta',
+    key: 'preferences/theme'
+  });
+  expect(crossTenant).toBeNull();
+});
+
+test('listMemories pages through the tenant via the client', async () => {
+  const t = initConvexTest();
+  for (const key of ['notes/1', 'notes/2', 'prefs/theme']) {
+    await t.mutation(internal.example.writeMemory, {
+      subject: 'user_alice',
+      orgCode: 'org_alpha',
+      key,
+      content: 'c'
+    });
+  }
+  await t.mutation(internal.example.writeMemory, {
+    subject: 'user_bob',
+    orgCode: 'org_beta',
+    key: 'notes/9',
+    content: 'c'
+  });
+
+  async function fetchPage(pageCursor: string | null) {
+    return await t.mutation(internal.example.listMemories, {
+      subject: 'user_alice',
+      orgCode: 'org_alpha',
+      keyPrefix: 'notes/',
+      numItems: 1,
+      cursor: pageCursor
+    });
+  }
+
+  const keys: string[] = [];
+  let cursor: string | null = null;
+  let isDone = false;
+  while (!isDone) {
+    const page = await fetchPage(cursor);
+    keys.push(...page.keys);
+    isDone = page.isDone;
+    cursor = page.continueCursor;
+  }
+  expect(keys.sort()).toEqual(['notes/1', 'notes/2']);
+});
+
+test('a tenant context conflict surfaces as a typed ConvexError from the client', async () => {
+  const t = initConvexTest();
+  await expectClientError(
+    t.mutation(internal.example.writeMemory, {
+      subject: 'user_alice',
+      orgCode: 'org_alpha',
+      claimedOrgCode: 'org_beta',
+      key: 'preferences/theme',
+      content: 'dark'
+    }),
+    'tenant_context_conflict'
+  );
+});

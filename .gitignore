@@ -23,3 +23,16 @@ coverage/
 
 # ---------------------------------------------------------------------
 # Add specific rules here…
+
+# TypeScript incremental build metadata
+*.tsbuildinfo
+
+# Local Convex deployment config
+.env.local
+
+# Claude Code local config
+.claude/
+
+# Backup files
+*.bak
+.env*.bak
